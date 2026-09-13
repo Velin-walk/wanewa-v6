@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { TrekTipsContent } from './TrekTipsContent';
 import {
   X,
   CreditCard,
@@ -177,35 +178,7 @@ export const InfoPagesModal: React.FC<InfoPagesModalProps> = ({
 
             {/* 2. TREK TIPS & PACKING */}
             {activeTab === 'trek_tips' && (
-              <div className="space-y-5 animate-in fade-in duration-150">
-                <div className="border-b border-[#F0EBE5] pb-3">
-                  <h3 className="text-lg font-extrabold text-[#1F1F1F]">Essential Trek Tips & Packing Checklist</h3>
-                  <p className="text-xs text-[#8B8680] mt-0.5">Field-tested advice from Himalayan trail leaders.</p>
-                </div>
-
-                <div className="space-y-3">
-                  <div className="p-3.5 rounded-2xl bg-[#F9F7F5] border border-[#E5E1DB] space-y-1.5">
-                    <h4 className="font-bold text-xs uppercase tracking-wider text-[#E08828]">1. High Altitude Acclimatization</h4>
-                    <p className="text-xs text-[#5A5551] leading-relaxed">
-                      Ascend gradually above 3,000m (no more than 400-500m per day). Drink at least 3-4 liters of water daily. Never push through throbbing AMS headaches.
-                    </p>
-                  </div>
-
-                  <div className="p-3.5 rounded-2xl bg-[#F9F7F5] border border-[#E5E1DB] space-y-1.5">
-                    <h4 className="font-bold text-xs uppercase tracking-wider text-[#7ABA42]">2. Layering System</h4>
-                    <p className="text-xs text-[#5A5551] leading-relaxed">
-                      Base layer (moisture-wicking merino wool) + Mid layer (fleece or down jacket) + Outer layer (breathable waterproof shell for sudden mountain rain).
-                    </p>
-                  </div>
-
-                  <div className="p-3.5 rounded-2xl bg-[#F9F7F5] border border-[#E5E1DB] space-y-1.5">
-                    <h4 className="font-bold text-xs uppercase tracking-wider text-[#5A5551]">3. Footwear & Blister Care</h4>
-                    <p className="text-xs text-[#5A5551] leading-relaxed">
-                      Break in your hiking boots at least 3 weeks before the trek. Always carry zinc-oxide tape, synthetic socks, and microfiber towel.
-                    </p>
-                  </div>
-                </div>
-              </div>
+              <TrekTipsContent />
             )}
 
             {/* 3. SAFETY & REFUND POLICY */}

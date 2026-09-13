@@ -6,6 +6,7 @@ import RouteDetail from './RouteDetail';
 import { parseGPX, parseKML } from './kmlParser';
 import { resolveAssetUrl } from './assetUrl';
 import { generateDemoRoutes } from './demoData';
+import { apiFetch } from '../../services/api';
 
 interface MapMinersDashboardProps {
   currentUserEmail?: string;
@@ -62,6 +63,7 @@ export default function MapMinersDashboard({
     setRoutes([]);
 
     try {
+      let combinedRoutes: any[] = [];
       const manifestUrl = resolveAssetUrl(`/mapminers/kml/routes-metadata.json?t=${Date.now()}`);
       const manifestRes = await fetch(manifestUrl);
       if (!manifestRes.ok) throw new Error('routes-metadata.json not found');
@@ -94,7 +96,32 @@ export default function MapMinersDashboard({
       if (loadedRoutes.length === 0) {
         setRoutes(generateDemoRoutes());
       } else {
-        setRoutes(loadedRoutes);
+        combinedRoutes = [...combinedRoutes, ...loadedRoutes];
+      }
+      
+      try {
+        const communityRes = await apiFetch('mapminers/trails');
+        if (communityRes.ok) {
+          const communityData = await communityRes.json();
+          if (communityData.success && communityData.data) {
+            const communityRoutes = Object.entries(communityData.data).map(([fileName, anyMeta]: [string, any]) => ({
+              ...anyMeta,
+              id: anyMeta.id || Math.random().toString(36).substring(2, 11),
+              fileName: fileName,
+              coordinates: anyMeta.startPos ? [anyMeta.startPos, anyMeta.startPos] : [],
+              isLazyLoaded: false,
+              isCommunityTrail: true
+            }));
+            combinedRoutes = [...combinedRoutes, ...communityRoutes];
+          }
+        }
+      } catch (err) {
+        console.error("Failed fetching community trails:", err);
+      }
+
+      if (combinedRoutes.length > 0) {
+        combinedRoutes.sort((a, b) => new Date(b.uploadedAt).getTime() - new Date(a.uploadedAt).getTime());
+        setRoutes(combinedRoutes);
       }
       setLoadingState({ status: 'done', errors: [] });
     } catch (e: any) {
@@ -122,8 +149,16 @@ export default function MapMinersDashboard({
 
     if (!route.isLazyLoaded && !route.isDemo) {
       try {
-        const fileUrl = resolveAssetUrl(`/mapminers/kml/${encodeURIComponent(route.fileName)}?t=${Date.now()}`);
-        const res = await fetch(fileUrl);
+        let res: Response;
+        if (route.isCommunityTrail) {
+          // Download directly from Cloudflare Worker which pulls from R2
+          res = await apiFetch(`mapminers/download/${encodeURIComponent(route.fileName)}`);
+        } else {
+          // Official maps hosted statically on Cloudflare Pages
+          const fileUrl = resolveAssetUrl(`/mapminers/kml/${encodeURIComponent(route.fileName)}?t=${Date.now()}`);
+          res = await fetch(fileUrl);
+        }
+
         if (!res.ok) throw new Error(`HTTP ${res.status} while loading ${route.fileName}`);
         const text = await res.text();
 
@@ -208,8 +243,8 @@ export default function MapMinersDashboard({
 
       const defaultStartPos = (parsedRoute as any).startPos || (parsedRoute.coordinates?.[0] ? { lat: parsedRoute.coordinates[0].lat, lng: parsedRoute.coordinates[0].lng } : { lat: 27.7, lng: 85.3 });
 
-      // Call real backend API to save the uploaded file persistently!
-      const response = await fetch('/api/mapminers/contribute', {
+      // Call the real backend API (Cloudflare Worker) which stores in R2 + D1
+      const response = await apiFetch('mapminers/upload', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json'
@@ -239,16 +274,16 @@ export default function MapMinersDashboard({
 
       const uploadResult = await response.json();
 
-      // Add to current session directly for instant, secure separate storage
       const sessionRoute = {
         ...parsedRoute,
-        id: `local-${Date.now()}`,
+        id: uploadResult.id || `local-${Date.now()}`,
         fileName: uploadResult.fileName || contributionFile.name,
         name: contributionName.trim(),
         uploadedAt: new Date().toISOString(),
         contributorName: currentUserEmail ? currentUserEmail.split('@')[0] : 'Map Miner',
         contributorEmail: currentUserEmail || '',
-        isLazyLoaded: true
+        isLazyLoaded: true,
+        isCommunityTrail: true
       };
 
       setRoutes(prev => [sessionRoute, ...prev]);
