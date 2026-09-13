@@ -13,9 +13,11 @@ import { FALLBACK_TREKS } from './data/fallbackTreks';
 import { CheckCircle2, AlertCircle, Mountain, Heart } from 'lucide-react';
 import MapMinersDashboard from './components/mapminers/MapMinersDashboard';
 import { apiFetch, normalizeTrek } from './services/api';
+import { isAdminEmail } from './adminUtils';
+import AdminDashboard from './components/admin/AdminDashboard';
 
 export default function App() {
-  const [currentTab, setCurrentTab] = useState<'treks' | 'bookings' | 'saved' | 'mapminers'>('treks');
+  const [currentTab, setCurrentTab] = useState<'treks' | 'bookings' | 'saved' | 'mapminers' | 'admin'>('treks');
   const [treks, setTreks] = useState<Trek[]>([]);
   const [bookings, setBookings] = useState<Booking[]>([]);
   const [loadingTreks, setLoadingTreks] = useState(true);
@@ -364,6 +366,10 @@ export default function App() {
             />
           )}
 
+          {currentTab === 'admin' && isAdminEmail(currentUserEmail) && (
+            <AdminDashboard currentUserEmail={currentUserEmail} />
+          )}
+
           {currentTab === 'mapminers' && (
             <MapMinersDashboard
               currentUserEmail={currentUserEmail}
@@ -389,6 +395,7 @@ export default function App() {
 
         {/* Mobile Bottom Tab Navigation */}
         <BottomNav
+            userEmail={currentUserEmail}
           currentTab={currentTab}
           onTabChange={setCurrentTab}
           bookingCount={bookings.length}

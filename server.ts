@@ -3,6 +3,7 @@ import cors from 'cors';
 import path from 'path';
 import fs from 'fs';
 import { Trek, Booking, Invite } from './src/types';
+import { DEFAULT_SAVED_HIKES, SavedHikeRecord } from './src/data/defaultItineraryTemplate';
 
 async function startServer() {
   const app = express();
@@ -30,17 +31,77 @@ async function startServer() {
     'https://walk-nepal-walk-api.velinrai-vr.workers.dev'
   ).replace(/\/+$/, '');
 
+  function convertSavedHikeToTrek(record: SavedHikeRecord): Trek {
+    const data = record.data;
+    const diffRaw = (data?.overview?.difficulty || 'Moderate').toLowerCase();
+    const diff: 'easy' | 'moderate' | 'difficult' =
+      diffRaw === 'hard' || diffRaw === 'challenging'
+        ? 'difficult'
+        : diffRaw === 'easy'
+        ? 'easy'
+        : 'moderate';
+
+    let priceDisplay = '';
+    if (data?.priceTiers && data.priceTiers.length > 0) {
+      const prices = data.priceTiers.map((t) => Number(t.price) || 0).filter((p) => p > 0);
+      if (prices.length > 0) {
+        const minP = Math.min(...prices);
+        const maxP = Math.max(...prices);
+        priceDisplay = `${data.currency || 'NPR'} ${minP.toLocaleString()}${
+          maxP !== minP ? ` - ${maxP.toLocaleString()}` : ''
+        }`;
+      }
+    }
+
+    return {
+      id: record.id || `hike-${record.hikeNumber}`,
+      hike_number: record.hikeNumber,
+      name: record.title || data?.title || 'Walk Nepal Walk Hike',
+      date: data?.hikeDate || 'Upcoming',
+      days: data?.overview?.expectedDuration || '1 Day',
+      difficulty: diff,
+      leader: 'Walk Nepal Walk Guide',
+      capacity: 25,
+      participants: 0,
+      itinerary_link: '',
+      faq_link: '',
+      whatsapp_link: '',
+      price: priceDisplay,
+      featured_image:
+        data?.coverImageUrl ||
+        'https://images.unsplash.com/photo-1544735716-392fe2489ffa?auto=format&fit=crop&w=1200&q=80',
+      fitness_level: 'All fitness levels',
+      season: 'Year-round',
+      type_of_trail: record.category || 'Overnight Bus Hikes',
+      start_location: data?.overview?.meetingPoint || 'Kathmandu, Nepal',
+      elevation: data?.overview?.elevationRange || '',
+      itinerary: '',
+    };
+  }
+
   function mapD1Trek(row: any): Trek {
     const diffRaw = (row.difficulty || 'Easy').toLowerCase();
     const diff: 'easy' | 'moderate' | 'difficult' =
-      diffRaw === 'hard' ? 'difficult' : diffRaw === 'moderate' ? 'moderate' : 'easy';
+      diffRaw === 'hard' || diffRaw === 'challenging'
+        ? 'difficult'
+        : diffRaw === 'moderate'
+        ? 'moderate'
+        : 'easy';
+
+    const priceDisplay =
+      row.price ||
+      (row.min_price
+        ? `${row.currency || 'NPR'} ${row.min_price}${
+            row.max_price && row.max_price !== row.min_price ? ` - ${row.max_price}` : ''
+          }`
+        : '');
 
     return {
-      id: String(row.hike_number || row.trek_name.toLowerCase().replace(/[^a-z0-9]+/g, '-')),
+      id: String(row.hike_number || row.id || (row.title || row.trek_name || '').toLowerCase().replace(/[^a-z0-9]+/g, '-')),
       hike_number: String(row.hike_number || ''),
-      name: row.trek_name,
-      date: row.date,
-      days: row.days || '1',
+      name: row.title || row.trek_name || 'Walk Nepal Walk Hike',
+      date: row.hike_date || row.date || '',
+      days: row.expected_duration || row.days || '1',
       difficulty: diff,
       leader: row.team_leader || 'Walk Nepal Walk Guide',
       capacity: Number(row.max_capacity) || 25,
@@ -48,19 +109,16 @@ async function startServer() {
       itinerary_link: row.itinerary_link || '',
       faq_link: row.faq_link || '',
       whatsapp_link: row.whatsapp_link || '',
-      price: row.price || '',
+      price: priceDisplay,
       featured_image:
+        row.cover_image_url ||
         row.thumbnail_url ||
         'https://images.unsplash.com/photo-1544735716-392fe2489ffa?auto=format&fit=crop&w=1200&q=80',
       fitness_level: 'All fitness levels',
       season: row.season || 'Autumn / Year-round',
-      type_of_trail: row.type_of_trail || (row.days?.includes('Subs')
-        ? 'Subscription Hike'
-        : row.days?.includes('Overnight')
-        ? 'Overnight Bus Hike'
-        : 'Alpine Trek'),
-      start_location: row.start_location || 'Kathmandu, Nepal',
-      elevation: row.elevation || '',
+      type_of_trail: row.category || row.type_of_trail || 'Overnight Bus Hike',
+      start_location: row.meeting_point || row.start_location || 'Kathmandu, Nepal',
+      elevation: row.elevation_range || row.elevation || '',
       itinerary: row.itinerary || '',
     };
   }
@@ -85,6 +143,37 @@ async function startServer() {
     }
 
     const mergedTreks: Trek[] = [...d1Treks];
+
+    // Merge saved published itineraries from the Admin Builder so they immediately appear in the catalog & homepage
+    const publishedSavedHikes = savedItineraries.filter((h) => h.status === 'published');
+    for (const savedHike of publishedSavedHikes) {
+      const hikeNum = (savedHike.hikeNumber || '').trim();
+      const existingIdx = mergedTreks.findIndex(
+        (t) =>
+          (hikeNum && t.hike_number && t.hike_number.trim() === hikeNum) ||
+          t.id === savedHike.id
+      );
+
+      const convertedTrek = convertSavedHikeToTrek(savedHike);
+
+      if (existingIdx !== -1) {
+        // Overlay richer details from the builder (e.g. fresh cover image, latest title & pricing)
+        mergedTreks[existingIdx] = {
+          ...mergedTreks[existingIdx],
+          name: savedHike.title || mergedTreks[existingIdx].name,
+          date: savedHike.data?.hikeDate || mergedTreks[existingIdx].date,
+          days: savedHike.data?.overview?.expectedDuration || mergedTreks[existingIdx].days,
+          price: convertedTrek.price || mergedTreks[existingIdx].price,
+          featured_image: savedHike.data?.coverImageUrl || mergedTreks[existingIdx].featured_image,
+          type_of_trail: savedHike.category || mergedTreks[existingIdx].type_of_trail,
+          start_location: savedHike.data?.overview?.meetingPoint || mergedTreks[existingIdx].start_location,
+          elevation: savedHike.data?.overview?.elevationRange || mergedTreks[existingIdx].elevation,
+        };
+      } else {
+        mergedTreks.unshift(convertedTrek);
+      }
+    }
+
     const norm = (s?: string) => (s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
 
     // Tally live participants and rosters for each trek purely from Cloudflare registrations + local session bookings
@@ -199,17 +288,25 @@ async function startServer() {
 
       if (cfRes.ok) {
         const cfJson = (await cfRes.json()) as { success: boolean; data: any[] };
-        if (cfJson.success && Array.isArray(cfJson.data) && cfJson.data.length > 0) {
+        if (cfJson.success && Array.isArray(cfJson.data)) {
           const mapped = cfJson.data.map(mapD1Trek);
           const enriched = await enrichTreksWithLiveParticipants(mapped);
           treks = enriched;
+          return;
         }
       }
+
+      // If D1 returned empty or non-200, enrich purely from saved itineraries
+      treks = await enrichTreksWithLiveParticipants([]);
     } catch (err: any) {
       if (err.name === 'AbortError' || err.name === 'TimeoutError') {
-        // Silent timeout recovery - existing cached treks remain active
+        // Silent timeout recovery
       } else {
         console.warn('[WNW Server] Revalidation note:', err?.message || err);
+      }
+      // If treks is still empty, populate from saved itineraries
+      if (treks.length === 0) {
+        treks = await enrichTreksWithLiveParticipants([]);
       }
     } finally {
       isRevalidatingTreks = false;
@@ -891,12 +988,34 @@ async function startServer() {
           Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
           'Accept-Language': 'en-US,en;q=0.9',
         },
+        signal: AbortSignal.timeout(6000),
       });
 
       if (!response.ok) {
         return res
-          .status(response.status)
-          .send(`Unable to fetch preview: ${response.statusText}`);
+          .status(200)
+          .send(`
+            <!DOCTYPE html>
+            <html>
+            <head>
+              <meta charset="utf-8">
+              <style>
+                body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; display: flex; align-items: center; justify-content: center; height: 100vh; margin: 0; background: #FAF8F5; color: #1F1F1F; text-align: center; padding: 20px; }
+                .card { background: white; padding: 32px; border-radius: 16px; border: 1px solid #E5E1DB; max-width: 420px; box-shadow: 0 4px 12px rgba(0,0,0,0.05); }
+                h3 { margin-top: 0; font-size: 18px; color: #1F1F1F; }
+                p { color: #8B8680; font-size: 14px; line-height: 1.5; }
+                .btn { display: inline-block; background: #E08828; color: white; padding: 10px 20px; border-radius: 10px; text-decoration: none; font-weight: bold; font-size: 13px; margin-top: 16px; }
+              </style>
+            </head>
+            <body>
+              <div class="card">
+                <h3>External Itinerary Document</h3>
+                <p>This itinerary document is hosted externally. Click below to view the complete schedule directly in your browser.</p>
+                <a class="btn" href="${targetUrl}" target="_blank" rel="noopener noreferrer">Open Itinerary Page &rarr;</a>
+              </div>
+            </body>
+            </html>
+          `);
       }
 
       let html = await response.text();
@@ -922,8 +1041,29 @@ async function startServer() {
       res.setHeader('Cache-Control', 'public, max-age=300'); // Cache 5 minutes
       return res.send(html);
     } catch (err: any) {
-      console.error('Error proxying itinerary preview:', err);
-      return res.status(500).send('Unable to load preview at this time.');
+      // Graceful fallback page if domain lookup or connection fails
+      return res.status(200).send(`
+        <!DOCTYPE html>
+        <html>
+        <head>
+          <meta charset="utf-8">
+          <style>
+            body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; display: flex; align-items: center; justify-content: center; height: 100vh; margin: 0; background: #FAF8F5; color: #1F1F1F; text-align: center; padding: 20px; }
+            .card { background: white; padding: 32px; border-radius: 16px; border: 1px solid #E5E1DB; max-width: 420px; box-shadow: 0 4px 12px rgba(0,0,0,0.05); }
+            h3 { margin-top: 0; font-size: 18px; color: #1F1F1F; }
+            p { color: #8B8680; font-size: 14px; line-height: 1.5; }
+            .btn { display: inline-block; background: #E08828; color: white; padding: 10px 20px; border-radius: 10px; text-decoration: none; font-weight: bold; font-size: 13px; margin-top: 16px; }
+          </style>
+        </head>
+        <body>
+          <div class="card">
+            <h3>External Itinerary Link</h3>
+            <p>This hike route guide is hosted on an external link. Click below to view the guide.</p>
+            <a class="btn" href="${targetUrl}" target="_blank" rel="noopener noreferrer">Open External Link &rarr;</a>
+          </div>
+        </body>
+        </html>
+      `);
     }
   });
 
@@ -1036,6 +1176,337 @@ async function startServer() {
     }
   });
 
+  // ===== ITINERARY & TREK LIBRARY API =====
+  const itinerariesFilePath = path.join(process.cwd(), 'data', 'itineraries.json');
+
+  function loadSavedItineraries(): SavedHikeRecord[] {
+    try {
+      if (fs.existsSync(itinerariesFilePath)) {
+        const raw = fs.readFileSync(itinerariesFilePath, 'utf-8');
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          return parsed;
+        }
+      }
+    } catch (e) {
+      console.warn('[Itineraries] Failed reading itineraries.json, falling back to default hikes:', e);
+    }
+    return DEFAULT_SAVED_HIKES;
+  }
+
+  function saveItinerariesToDisk(records: SavedHikeRecord[]) {
+    try {
+      const dir = path.dirname(itinerariesFilePath);
+      if (!fs.existsSync(dir)) {
+        fs.mkdirSync(dir, { recursive: true });
+      }
+      fs.writeFileSync(itinerariesFilePath, JSON.stringify(records, null, 2), 'utf-8');
+    } catch (e) {
+      console.error('[Itineraries] Failed saving itineraries to disk:', e);
+    }
+  }
+
+  let savedItineraries: SavedHikeRecord[] = loadSavedItineraries();
+
+  // Helper to sync itinerary record with Cloudflare D1
+  async function syncItineraryToCloudflare(record: SavedHikeRecord): Promise<{ success: boolean; error?: string }> {
+    const d = record.data;
+    const prices = (d?.priceTiers || []).map((t) => Number(t.price) || 0).filter((p) => p > 0);
+    const minPrice = prices.length > 0 ? Math.min(...prices) : 0;
+    const maxPrice = prices.length > 0 ? Math.max(...prices) : 0;
+
+    // Comprehensive payload matching both worker formats
+    const payload = {
+      id: record.id,
+      hike_number: record.hikeNumber || d?.hikeNumber || 'TBD',
+      hikeNumber: record.hikeNumber || d?.hikeNumber || 'TBD',
+      title: record.title || d?.title || 'Walk Nepal Walk Hike',
+      trek_name: record.title || d?.title || 'Walk Nepal Walk Hike',
+      category: record.category || d?.category || 'Overnight Bus Hikes',
+      status: record.status || 'published',
+      authorEmail: record.authorEmail || 'walknepalwalk@gmail.com',
+      hike_date: d?.hikeDate || '',
+      date: d?.hikeDate || '',
+      expected_duration: d?.overview?.expectedDuration || '1 Day',
+      days: d?.overview?.expectedDuration || '1 Day',
+      difficulty: d?.overview?.difficulty || 'Moderate',
+      meeting_point: d?.overview?.meetingPoint || 'Kathmandu, Nepal',
+      start_location: d?.overview?.meetingPoint || 'Kathmandu, Nepal',
+      elevation_range: d?.overview?.elevationRange || '',
+      elevation: d?.overview?.elevationRange || '',
+      cover_image_url: d?.coverImageUrl || '',
+      featured_image: d?.coverImageUrl || '',
+      min_price: minPrice,
+      max_price: maxPrice,
+      currency: d?.currency || 'NPR',
+      price: minPrice ? `${d?.currency || 'NPR'} ${minPrice.toLocaleString()}` : '',
+      data_json: JSON.stringify(d || {}),
+      data: d,
+    };
+
+    // 1. Try POST /treks/sync
+    try {
+      const res = await fetch(`${CLOUDFLARE_WORKER_URL}/treks/sync`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+        signal: AbortSignal.timeout(8000),
+      });
+
+      if (res.ok) {
+        console.log(`[Cloudflare D1] Synced Hike #${record.hikeNumber} via /treks/sync`);
+        return { success: true };
+      }
+
+      // If /treks/sync gave 404 or 405, fallback to POST /treks
+      if (res.status === 404 || res.status === 405) {
+        const fallbackRes = await fetch(`${CLOUDFLARE_WORKER_URL}/treks`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+          signal: AbortSignal.timeout(8000),
+        });
+        if (fallbackRes.ok) {
+          console.log(`[Cloudflare D1] Synced Hike #${record.hikeNumber} via /treks`);
+          return { success: true };
+        }
+        const errTxt = await fallbackRes.text();
+        return { success: false, error: `Cloudflare HTTP ${fallbackRes.status}: ${errTxt}` };
+      }
+
+      const text = await res.text();
+      console.warn(`[Cloudflare D1 Sync HTTP ${res.status}] for Hike #${record.hikeNumber}:`, text);
+      return { success: false, error: `Cloudflare HTTP ${res.status}: ${text}` };
+    } catch (e: any) {
+      console.warn(`[Cloudflare D1 Sync] Network exception for Hike #${record.hikeNumber}:`, e?.message || e);
+      return { success: false, error: e?.message || 'Network exception' };
+    }
+  }
+
+  // Helper to delete from Cloudflare D1
+  async function deleteItineraryFromCloudflare(hikeNumber: string) {
+    if (!hikeNumber || hikeNumber === 'TBD') return;
+    try {
+      await fetch(`${CLOUDFLARE_WORKER_URL}/treks/${encodeURIComponent(hikeNumber)}`, {
+        method: 'DELETE',
+        signal: AbortSignal.timeout(5000),
+      });
+      console.log(`[Cloudflare D1] Deleted Hike #${hikeNumber}`);
+    } catch (e: any) {
+      console.warn(`[Cloudflare D1] Delete note:`, e?.message || e);
+    }
+  }
+
+  // GET /api/admin/itineraries - list all saved hikes
+  app.get('/api/admin/itineraries', (req, res) => {
+    return res.json({
+      success: true,
+      data: savedItineraries,
+    });
+  });
+
+  // GET /api/admin/itineraries/:id - get single hike
+  app.get('/api/admin/itineraries/:id', (req, res) => {
+    const item = savedItineraries.find((h) => h.id === req.params.id);
+    if (!item) {
+      return res.status(404).json({ success: false, error: 'Hike not found' });
+    }
+    return res.json({ success: true, data: item });
+  });
+
+  // POST /api/admin/itineraries - create new hike record
+  app.post('/api/admin/itineraries', (req, res) => {
+    try {
+      const { data, status = 'draft', authorEmail = 'admin@walknepalwalk.com' } = req.body;
+      if (!data || !data.title) {
+        return res.status(400).json({ success: false, error: 'Missing hike data or title' });
+      }
+
+      const hikeNum = (data.hikeNumber || '').trim();
+      const slug = (data.title || 'hike')
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, '-')
+        .replace(/^-+|-+$/g, '');
+      const uniqueId = `hike-${hikeNum ? hikeNum + '-' : ''}${slug}-${Date.now().toString(36)}`;
+
+      const newRecord: SavedHikeRecord = {
+        id: uniqueId,
+        hikeNumber: hikeNum || 'TBD',
+        title: data.title,
+        category: data.category || 'Overnight Bus Hikes',
+        status: status as any,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+        authorEmail,
+        data,
+      };
+
+      savedItineraries.unshift(newRecord);
+      saveItinerariesToDisk(savedItineraries);
+
+      // Async sync to Cloudflare D1
+      syncItineraryToCloudflare(newRecord).catch(() => {});
+
+      // Immediately refresh public treks list
+      revalidateTreks().catch(() => {});
+
+      return res.status(201).json({ success: true, data: newRecord });
+    } catch (e: any) {
+      return res.status(500).json({ success: false, error: e.message });
+    }
+  });
+
+  // PUT /api/admin/itineraries/:id - update or upsert hike record
+  app.put('/api/admin/itineraries/:id', (req, res) => {
+    try {
+      const idx = savedItineraries.findIndex((h) => h.id === req.params.id);
+      const { data, status } = req.body;
+
+      if (idx === -1) {
+        // Record doesn't exist yet - upsert as new record
+        const hikeNum = (data?.hikeNumber || '').trim();
+        const newRecord: SavedHikeRecord = {
+          id: req.params.id,
+          hikeNumber: hikeNum || 'TBD',
+          title: data?.title || 'Untitled Hike',
+          category: data?.category || 'Overnight Bus Hikes',
+          status: (status || 'draft') as any,
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+          authorEmail: 'admin@walknepalwalk.com',
+          data: data || {},
+        };
+        savedItineraries.unshift(newRecord);
+        saveItinerariesToDisk(savedItineraries);
+
+        syncItineraryToCloudflare(newRecord).catch(() => {});
+        return res.status(200).json({ success: true, data: newRecord });
+      }
+
+      const existing = savedItineraries[idx];
+
+      const updatedRecord: SavedHikeRecord = {
+        ...existing,
+        hikeNumber: data?.hikeNumber ?? existing.hikeNumber,
+        title: data?.title ?? existing.title,
+        category: data?.category ?? existing.category,
+        status: status ?? existing.status,
+        updatedAt: new Date().toISOString(),
+        data: data ?? existing.data,
+      };
+
+      savedItineraries[idx] = updatedRecord;
+      saveItinerariesToDisk(savedItineraries);
+
+      syncItineraryToCloudflare(updatedRecord).catch(() => {});
+      revalidateTreks().catch(() => {});
+
+      return res.json({ success: true, data: updatedRecord });
+    } catch (e: any) {
+      return res.status(500).json({ success: false, error: e.message });
+    }
+  });
+
+  // POST /api/admin/itineraries/:id/clone - duplicate hike record
+  app.post('/api/admin/itineraries/:id/clone', (req, res) => {
+    try {
+      const source = savedItineraries.find((h) => h.id === req.params.id);
+      if (!source) {
+        return res.status(404).json({ success: false, error: 'Source hike not found' });
+      }
+
+      const cloneId = `hike-copy-${Date.now().toString(36)}`;
+      const clonedTitle = `${source.title} (Copy)`;
+      const clonedData = JSON.parse(JSON.stringify(source.data));
+      clonedData.title = clonedTitle;
+
+      const clonedRecord: SavedHikeRecord = {
+        ...source,
+        id: cloneId,
+        title: clonedTitle,
+        status: 'draft',
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+        data: clonedData,
+      };
+
+      savedItineraries.unshift(clonedRecord);
+      saveItinerariesToDisk(savedItineraries);
+
+      syncItineraryToCloudflare(clonedRecord).catch(() => {});
+      revalidateTreks().catch(() => {});
+
+      return res.status(201).json({ success: true, data: clonedRecord });
+    } catch (e: any) {
+      return res.status(500).json({ success: false, error: e.message });
+    }
+  });
+
+  // PATCH /api/admin/itineraries/:id/status - toggle status
+  app.patch('/api/admin/itineraries/:id/status', (req, res) => {
+    try {
+      const idx = savedItineraries.findIndex((h) => h.id === req.params.id);
+      if (idx === -1) {
+        return res.status(404).json({ success: false, error: 'Hike not found' });
+      }
+
+      const { status } = req.body;
+      if (!['draft', 'published', 'archived'].includes(status)) {
+        return res.status(400).json({ success: false, error: 'Invalid status' });
+      }
+
+      savedItineraries[idx].status = status;
+      savedItineraries[idx].updatedAt = new Date().toISOString();
+      saveItinerariesToDisk(savedItineraries);
+
+      syncItineraryToCloudflare(savedItineraries[idx]).catch(() => {});
+      revalidateTreks().catch(() => {});
+
+      return res.json({ success: true, data: savedItineraries[idx] });
+    } catch (e: any) {
+      return res.status(500).json({ success: false, error: e.message });
+    }
+  });
+
+  // POST /api/admin/sync-all-to-cloudflare - Bulk push all saved itineraries to D1
+  app.post('/api/admin/sync-all-to-cloudflare', async (req, res) => {
+    try {
+      const results: Array<{ hikeNumber: string; success: boolean; error?: string }> = [];
+      for (const item of savedItineraries) {
+        const syncRes = await syncItineraryToCloudflare(item);
+        results.push({ hikeNumber: item.hikeNumber, ...syncRes });
+      }
+      await revalidateTreks();
+      return res.json({
+        success: true,
+        message: `Synced ${results.filter((r) => r.success).length}/${results.length} treks to Cloudflare D1`,
+        results,
+      });
+    } catch (e: any) {
+      return res.status(500).json({ success: false, error: e.message });
+    }
+  });
+
+  // DELETE /api/admin/itineraries/:id - delete hike record
+  app.delete('/api/admin/itineraries/:id', (req, res) => {
+    try {
+      const idx = savedItineraries.findIndex((h) => h.id === req.params.id);
+      if (idx === -1) {
+        return res.status(404).json({ success: false, error: 'Hike not found' });
+      }
+
+      const deleted = savedItineraries.splice(idx, 1)[0];
+      saveItinerariesToDisk(savedItineraries);
+
+      deleteItineraryFromCloudflare(deleted.hikeNumber).catch(() => {});
+      revalidateTreks().catch(() => {});
+
+      return res.json({ success: true, data: deleted });
+    } catch (e: any) {
+      return res.status(500).json({ success: false, error: e.message });
+    }
+  });
+
   // ===== VITE MIDDLEWARE / STATIC SERVING =====
   if (process.env.NODE_ENV !== 'production') {
     const { createServer: createViteServer } = await import('vite');
@@ -1052,17 +1523,12 @@ async function startServer() {
     });
   }
 
-  // Background warmup of trek and registration data from Cloudflare
-  fetch(`${CLOUDFLARE_WORKER_URL}/treks`)
-    .then((r) => r.json())
-    .then(async (data: any) => {
-      if (data.success && Array.isArray(data.data) && data.data.length > 0) {
-        const mapped = data.data.map(mapD1Trek);
-        treks = await enrichTreksWithLiveParticipants(mapped);
-        console.log(`[WNW Server] Warmed up ${treks.length} treks with live participant counts.`);
-      }
+  // Initial warmup of trek and registration data
+  revalidateTreks()
+    .then(() => {
+      console.log(`[WNW Server] Initialized ${treks.length} treks with live participant counts.`);
     })
-    .catch((err) => console.warn('[WNW Server] Background trek warmup failed:', err));
+    .catch((err) => console.warn('[WNW Server] Initial trek warmup failed:', err));
 
   app.listen(PORT, '0.0.0.0', () => {
     console.log(`Server running on http://0.0.0.0:${PORT}`);

@@ -14,8 +14,9 @@ import {
 import { SubPageType } from './InfoPagesModal';
 
 interface BottomNavProps {
-  currentTab: 'treks' | 'bookings' | 'saved' | 'mapminers';
-  onTabChange: (tab: 'treks' | 'bookings' | 'saved' | 'mapminers') => void;
+  currentTab: 'treks' | 'bookings' | 'saved' | 'mapminers' | 'admin';
+  onTabChange: (tab: any) => void;
+  userEmail: string;
   bookingCount: number;
   savedCount: number;
   onOpenInfoPage?: (page: SubPageType) => void;
@@ -27,6 +28,7 @@ export const BottomNav: React.FC<BottomNavProps> = ({
   bookingCount,
   savedCount,
   onOpenInfoPage,
+  userEmail,
 }) => {
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
