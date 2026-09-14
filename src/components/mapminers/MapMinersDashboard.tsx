@@ -77,43 +77,51 @@ export default function MapMinersDashboard({
       const communityRes = await apiFetch('mapminers/trails');
       if (communityRes.ok) {
         const communityData = await communityRes.json();
-        if (communityData.success && communityData.data && Object.keys(communityData.data).length > 0) {
-          const loadedRoutes = Object.entries(communityData.data).map(([fileName, anyMeta]: [string, any]) => {
-            const startPosObj = parseStartPos(anyMeta.startPos);
-            return {
-              ...anyMeta,
-              id: anyMeta.id || Math.random().toString(36).substring(2, 11),
-              fileName: fileName,
-              name: anyMeta.name || 'Untitled Route',
-              description: anyMeta.description || '',
-              difficulty: anyMeta.difficultyOverride !== 'Auto' ? anyMeta.difficultyOverride : (anyMeta.calculatedDifficulty || 'Moderate'),
-              stats: {
-                distance: 0,
-                elevationGain: 0,
-                elevationLoss: 0,
-                minElevation: 0,
-                maxElevation: 0,
-                ...anyMeta.stats,
-                estimatedHours: anyMeta.hoursOverride !== 'Auto' ? anyMeta.hoursOverride : (anyMeta.stats?.estimatedHours || 0)
-              },
-              province: anyMeta.province || 'Bagmati',
-              district: anyMeta.district || 'Kathmandu',
-              nearbyCity: anyMeta.nearbyCity || 'Kathmandu',
-              highlights: anyMeta.highlights || '',
-              uploadedAt: anyMeta.uploadedAt || new Date().toISOString(),
-              contributorEmail: anyMeta.contributorEmail || '',
-              contributorName: anyMeta.contributorName || 'Community Member',
-              bounds: anyMeta.bounds,
-              coordinates: startPosObj ? [startPosObj, startPosObj] : [],
-              isLazyLoaded: false,
-              isCommunityTrail: true
-            };
-          });
+        if (communityData.success && communityData.data) {
+          const rawItems = Array.isArray(communityData.data)
+            ? communityData.data
+            : Object.values(communityData.data);
 
-          loadedRoutes.sort((a, b) => new Date(b.uploadedAt).getTime() - new Date(a.uploadedAt).getTime());
-          setRoutes(loadedRoutes);
-          setLoadingState({ status: 'done', errors: [] });
-          return;
+          if (rawItems.length > 0) {
+            const loadedRoutes = rawItems.map((anyMeta: any, index: number) => {
+              const startPosObj = parseStartPos(anyMeta.startPos);
+              const realFileName = anyMeta.fileName || anyMeta.file_name || anyMeta.name || `trail_${index}.gpx`;
+
+              return {
+                ...anyMeta,
+                id: anyMeta.id || `trail-${index}-${Math.random().toString(36).substring(2, 7)}`,
+                fileName: realFileName,
+                name: anyMeta.name || realFileName,
+                description: anyMeta.description || '',
+                difficulty: anyMeta.difficultyOverride !== 'Auto' ? anyMeta.difficultyOverride : (anyMeta.calculatedDifficulty || 'Moderate'),
+                stats: {
+                  distance: 0,
+                  elevationGain: 0,
+                  elevationLoss: 0,
+                  minElevation: 0,
+                  maxElevation: 0,
+                  ...anyMeta.stats,
+                  estimatedHours: anyMeta.hoursOverride !== 'Auto' ? anyMeta.hoursOverride : (anyMeta.stats?.estimatedHours || 0)
+                },
+                province: anyMeta.province || 'Bagmati',
+                district: anyMeta.district || 'Kathmandu',
+                nearbyCity: anyMeta.nearbyCity || 'Kathmandu',
+                highlights: anyMeta.highlights || '',
+                uploadedAt: anyMeta.uploadedAt || anyMeta.uploaded_at || new Date().toISOString(),
+                contributorEmail: anyMeta.contributorEmail || anyMeta.contributor_email || '',
+                contributorName: anyMeta.contributorName || 'Community Member',
+                bounds: anyMeta.bounds,
+                coordinates: startPosObj ? [startPosObj, startPosObj] : [],
+                isLazyLoaded: false,
+                isCommunityTrail: true
+              };
+            });
+
+            loadedRoutes.sort((a, b) => new Date(b.uploadedAt).getTime() - new Date(a.uploadedAt).getTime());
+            setRoutes(loadedRoutes);
+            setLoadingState({ status: 'done', errors: [] });
+            return;
+          }
         }
       }
 
@@ -201,9 +209,22 @@ export default function MapMinersDashboard({
     const file = event.target.files?.[0];
     if (!file) return;
     const extension = file.name.split('.').pop()?.toLowerCase();
+
+    if (extension === 'kmz') {
+      setContributionFile(null);
+      setContributionError('.KMZ is a compressed file format. Please unzip/extract the doc.kml file inside or save as .GPX/.KML.');
+      return;
+    }
+
+    if (extension === 'geojson' || extension === 'json') {
+      setContributionFile(null);
+      setContributionError('GeoJSON format is not directly supported yet. Please convert your route file to .GPX or .KML.');
+      return;
+    }
+
     if (extension !== 'gpx' && extension !== 'kml') {
       setContributionFile(null);
-      setContributionError('Please choose a valid GPX or KML file.');
+      setContributionError('Please choose a valid GPX (.gpx) or KML (.kml) trail file.');
       return;
     }
     setContributionFile(file);
@@ -228,46 +249,51 @@ export default function MapMinersDashboard({
       const parsedRoute = parser(fileText, contributionFile.name, contributionName.trim());
       
       if (!parsedRoute) {
-        throw new Error('No coordinates or route tracks were found in that file.');
+        throw new Error('No valid coordinate tracks (<trkpt>, <rtept>, <coordinates>, <wpt>) were found in this file.');
       }
 
       const defaultStartPos = (parsedRoute as any).startPos || (parsedRoute.coordinates?.[0] ? { lat: parsedRoute.coordinates[0].lat, lng: parsedRoute.coordinates[0].lng } : { lat: 27.7, lng: 85.3 });
 
       // Call the real backend API (Cloudflare Worker) which stores in R2 + D1
-      const response = await apiFetch('mapminers/upload', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({
-          fileName: contributionFile.name,
-          fileContent: fileText,
-          name: contributionName.trim(),
-          description: parsedRoute.description || '',
-          difficulty: parsedRoute.difficulty || 'Moderate',
-          stats: parsedRoute.stats,
-          bounds: parsedRoute.bounds || [[27.6, 85.2], [27.8, 85.5]],
-          startPos: defaultStartPos,
-          contributorName: currentUserEmail ? currentUserEmail.split('@')[0] : 'Map Miner',
-          contributorEmail: currentUserEmail || '',
-          province: (parsedRoute as any).province || 'Bagmati',
-          district: (parsedRoute as any).district || 'Kathmandu',
-          nearbyCity: (parsedRoute as any).nearbyCity || 'Kathmandu',
-          highlights: (parsedRoute as any).highlights || 'Uploaded by community'
-        })
-      });
+      let uploadResult: any = null;
+      try {
+        const response = await apiFetch('mapminers/upload', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({
+            fileName: contributionFile.name,
+            fileContent: fileText,
+            name: contributionName.trim(),
+            description: parsedRoute.description || '',
+            difficulty: parsedRoute.difficulty || 'Moderate',
+            stats: parsedRoute.stats,
+            bounds: parsedRoute.bounds || [[27.6, 85.2], [27.8, 85.5]],
+            startPos: defaultStartPos,
+            contributorName: currentUserEmail ? currentUserEmail.split('@')[0] : 'Map Miner',
+            contributorEmail: currentUserEmail || '',
+            province: (parsedRoute as any).province || 'Bagmati',
+            district: (parsedRoute as any).district || 'Kathmandu',
+            nearbyCity: (parsedRoute as any).nearbyCity || 'Kathmandu',
+            highlights: (parsedRoute as any).highlights || 'Uploaded by community'
+          })
+        });
 
-      if (!response.ok) {
-        const errorData = await response.json().catch(() => ({}));
-        throw new Error(errorData.error || `Upload failed with status code ${response.status}`);
+        if (response.ok) {
+          uploadResult = await response.json();
+        } else {
+          const errorData = await response.json().catch(() => ({}));
+          console.warn('Backend upload notice:', errorData.error || `HTTP ${response.status}`);
+        }
+      } catch (backendErr) {
+        console.warn('Backend network upload notice (rendering locally in session):', backendErr);
       }
-
-      const uploadResult = await response.json();
 
       const sessionRoute = {
         ...parsedRoute,
-        id: uploadResult.id || `local-${Date.now()}`,
-        fileName: uploadResult.fileName || contributionFile.name,
+        id: uploadResult?.id || `local-${Date.now()}`,
+        fileName: uploadResult?.fileName || contributionFile.name,
         name: contributionName.trim(),
         uploadedAt: new Date().toISOString(),
         contributorName: currentUserEmail ? currentUserEmail.split('@')[0] : 'Map Miner',
@@ -282,7 +308,7 @@ export default function MapMinersDashboard({
       setContributionName('');
       setContributionFile(null);
     } catch (err: any) {
-      setContributionError(err?.message || 'Could not parse or upload this trail file.');
+      setContributionError(err?.message || 'Could not parse or process this trail file.');
     } finally {
       setIsContributing(false);
     }

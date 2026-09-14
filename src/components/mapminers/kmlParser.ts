@@ -216,6 +216,35 @@ export function parseGPX(gpxText: string, fileName: string, nameOverride = ''): 
     }
   }
 
+  // 4. Fallback: look for waypoints (<wpt>) if no tracks or routes exist
+  if (segments.length === 0) {
+    const wpts = allElements.filter(el => {
+      const name = (el.localName || el.nodeName || '').toLowerCase();
+      return name === 'wpt' || name.endsWith(':wpt');
+    });
+    const parsedWpts: Coordinate[] = [];
+    wpts.forEach(pt => {
+      const latAttr = pt.getAttribute('lat');
+      const lonAttr = pt.getAttribute('lon');
+      if (latAttr && lonAttr) {
+        const lat = parseFloat(latAttr);
+        const lng = parseFloat(lonAttr);
+        let ele = 0;
+        const eleEl = Array.from(pt.getElementsByTagName('*')).find(child => {
+          const cName = (child.localName || child.nodeName || '').toLowerCase();
+          return cName === 'ele' || cName.endsWith(':ele');
+        });
+        if (eleEl) ele = parseFloat(eleEl.textContent || '0');
+        if (Number.isFinite(lat) && Number.isFinite(lng)) {
+          parsedWpts.push({ lat, lng, ele: Number.isFinite(ele) ? ele : 0 });
+        }
+      }
+    });
+    if (parsedWpts.length > 0) {
+      segments.push(parsedWpts);
+    }
+  }
+
   if (segments.length === 0) return null;
 
   // Metadata/names search
