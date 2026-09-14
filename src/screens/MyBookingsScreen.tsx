@@ -26,6 +26,7 @@ interface MyBookingsScreenProps {
   onExploreTreks: () => void;
   onShare: (booking: Booking) => void;
   onLeaveFeedback?: (booking: Booking) => void;
+  onViewItinerary?: (booking: Booking) => void;
 }
 
 export const MyBookingsScreen: React.FC<MyBookingsScreenProps> = ({
@@ -35,6 +36,7 @@ export const MyBookingsScreen: React.FC<MyBookingsScreenProps> = ({
   onExploreTreks,
   onShare,
   onLeaveFeedback,
+  onViewItinerary,
 }) => {
   const [expandedId, setExpandedId] = useState<number | null>(null);
   const [cancelingId, setCancelingId] = useState<number | null>(null);
@@ -243,37 +245,24 @@ export const MyBookingsScreen: React.FC<MyBookingsScreenProps> = ({
                     </div>
                   )}
 
-                  {/* Live Links from Cloudflare D1 (WhatsApp, Itinerary, FAQ) */}
-                  {(booking.whatsapp_link || booking.itinerary_link || booking.faq_link) && (
-                    <div className="p-3 bg-white rounded-xl border border-[#E5E1DB] space-y-2">
-                      <span className="text-[9px] font-bold text-[#8B8680] uppercase tracking-wider block">
-                        Trek Coordination & Itinerary
-                      </span>
-                      <div className="flex flex-wrap gap-2 items-center justify-between">
-                        <div className="flex items-center gap-2 flex-wrap">
-                          {booking.itinerary_link && (
-                            <a
-                              href={booking.itinerary_link}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              className="inline-flex items-center gap-1 px-2.5 py-1.5 text-xs font-semibold text-[#E08828] bg-[#E08828]/10 hover:bg-[#E08828]/20 rounded-lg transition-all"
-                            >
-                              <FileText className="w-3.5 h-3.5" />
-                              <span>View Route Itinerary</span>
-                            </a>
-                          )}
-                          {booking.faq_link && (
-                            <a
-                              href={booking.faq_link}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              className="inline-flex items-center gap-1 px-2.5 py-1.5 text-xs font-semibold text-[#5A5551] bg-[#F4EFEA] hover:bg-[#EAE4DC] rounded-lg transition-all"
-                            >
-                              <HelpCircle className="w-3.5 h-3.5 text-[#8B8680]" />
-                              <span>Trek FAQ</span>
-                            </a>
-                          )}
-                        </div>
+                  {/* Live Links from Cloudflare D1 (WhatsApp, Itinerary) */}
+                  <div className="p-3 bg-white rounded-xl border border-[#E5E1DB] space-y-2">
+                    <span className="text-[9px] font-bold text-[#8B8680] uppercase tracking-wider block">
+                      Trek Coordination & Itinerary
+                    </span>
+                    <div className="flex flex-wrap gap-2 items-center justify-between">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        {onViewItinerary && (
+                          <button
+                            type="button"
+                            onClick={() => onViewItinerary(booking)}
+                            className="inline-flex items-center gap-1 px-2.5 py-1.5 text-xs font-semibold text-[#E08828] bg-[#E08828]/10 hover:bg-[#E08828]/20 border border-[#E08828]/20 rounded-lg transition-all cursor-pointer"
+                          >
+                            <FileText className="w-3.5 h-3.5" />
+                            <span>View Route Itinerary</span>
+                          </button>
+                        )}
+                      </div>
 
                         {booking.whatsapp_link && (
                           <a
@@ -288,7 +277,6 @@ export const MyBookingsScreen: React.FC<MyBookingsScreenProps> = ({
                         )}
                       </div>
                     </div>
-                  )}
 
                   {/* Actions */}
                   <div className="pt-2 flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-2.5 border-t border-[#F0EBE5]">

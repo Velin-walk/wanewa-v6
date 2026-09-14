@@ -55,6 +55,7 @@ export const HikeLibraryList: React.FC<HikeLibraryListProps> = ({
   const [selectedCategory, setSelectedCategory] = useState<string>('all');
   const [selectedStatus, setSelectedStatus] = useState<string>('all');
   const [sharingHike, setSharingHike] = useState<SavedHikeRecord | null>(null);
+  const [deletingHike, setDeletingHike] = useState<SavedHikeRecord | null>(null);
   const [actionFeedback, setActionFeedback] = useState<string | null>(null);
   const [isSyncingCloudflare, setIsSyncingCloudflare] = useState(false);
 
@@ -112,9 +113,14 @@ export const HikeLibraryList: React.FC<HikeLibraryListProps> = ({
   };
 
   const handleDelete = (hike: SavedHikeRecord) => {
-    if (window.confirm(`Are you sure you want to delete "${hike.title}" (Hike #${hike.hikeNumber})?`)) {
-      onDeleteHike(hike.id);
-      showToast(`Deleted "${hike.title}"`);
+    setDeletingHike(hike);
+  };
+
+  const confirmDelete = () => {
+    if (deletingHike) {
+      onDeleteHike(deletingHike.id);
+      showToast(`Deleted "${deletingHike.title}"`);
+      setDeletingHike(null);
     }
   };
 
@@ -398,15 +404,15 @@ export const HikeLibraryList: React.FC<HikeLibraryListProps> = ({
                     {/* Route Quick Stats */}
                     <div className="grid grid-cols-2 gap-2 mt-4 p-3 bg-[#FAF8F5] rounded-2xl border border-[#EFEAE4] text-[11px]">
                       <div>
-                        <span className="text-[#8B8680] block text-[10px]">Distance & Climb</span>
+                        <span className="text-[#8B8680] block text-[10px]">Distance & Difficulty</span>
                         <span className="font-bold text-[#1F1F1F] truncate block">
-                          {hike.data.overview.approxDistance || 'N/A'} • {hike.data.overview.elevationGross || hike.data.overview.elevationRange || ''}
+                          {hike.data.overview.approxDistance || 'N/A'} • {hike.data.overview.difficulty || 'Moderate'}
                         </span>
                       </div>
                       <div>
-                        <span className="text-[#8B8680] block text-[10px]">Difficulty</span>
+                        <span className="text-[#8B8680] block text-[10px]">Leader & Capacity</span>
                         <span className="font-bold text-[#3D3A37] truncate block">
-                          {hike.data.overview.difficulty || 'Moderate'}
+                          {hike.data.teamLeader || 'TBD'} • {hike.data.maxCapacity || 'TBD'} pax
                         </span>
                       </div>
                     </div>
@@ -504,6 +510,35 @@ export const HikeLibraryList: React.FC<HikeLibraryListProps> = ({
             onSelectPreview(h);
           }}
         />
+      )}
+
+      {/* Custom Delete Confirmation Modal */}
+      {deletingHike && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-xs z-50 flex items-center justify-center p-4 animate-in fade-in duration-200">
+          <div className="bg-white rounded-3xl max-w-md w-full border border-[#E5E1DB] p-6 shadow-2xl animate-in zoom-in-95 duration-200">
+            <h3 className="text-lg font-black text-[#1F1F1F]">Delete Itinerary?</h3>
+            <p className="text-xs text-[#5A5551] mt-2 leading-relaxed">
+              Are you sure you want to permanently delete <strong className="text-[#1F1F1F]">"{deletingHike.title}" (Hike #{deletingHike.hikeNumber || deletingHike.data?.hikeNumber || 'TBA'})</strong>? 
+              This will remove it from your local library database and delete the corresponding record from Cloudflare D1.
+            </p>
+            <div className="flex items-center justify-end gap-2.5 mt-6">
+              <button
+                type="button"
+                onClick={() => setDeletingHike(null)}
+                className="px-4 py-2.5 bg-[#FAF8F5] border border-[#E5E1DB] hover:bg-[#F0EBE5] text-[#5A5551] rounded-xl font-bold text-xs transition-colors cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={confirmDelete}
+                className="px-4 py-2.5 bg-rose-600 hover:bg-rose-700 text-white rounded-xl font-bold text-xs shadow-xs transition-colors cursor-pointer"
+              >
+                Permanently Delete
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );

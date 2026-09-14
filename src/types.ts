@@ -31,6 +31,7 @@ export interface Trek {
   fitness_level?: string;
   season?: string;
   type_of_trail?: string;
+  data?: any;
 }
 
 export interface TeamMember {

@@ -363,6 +363,13 @@ export default function App() {
                 setFeedbackModalTrek(matchedTrek || null);
                 setShowFeedbackModal(true);
               }}
+              onViewItinerary={(booking) => {
+                const matchedTrek = treks.find((t) => t.id === booking.trek_id || t.hike_number === booking.hike_number || t.name === booking.trek_name);
+                if (matchedTrek) {
+                  setItineraryModalTrek(matchedTrek);
+                  setItineraryModalType('itinerary');
+                }
+              }}
             />
           )}
 

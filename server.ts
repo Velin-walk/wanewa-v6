@@ -60,12 +60,12 @@ async function startServer() {
       date: data?.hikeDate || 'Upcoming',
       days: data?.overview?.expectedDuration || '1 Day',
       difficulty: diff,
-      leader: 'Walk Nepal Walk Guide',
-      capacity: 25,
+      leader: data?.teamLeader || 'Walk Nepal Walk Guide',
+      capacity: Number(data?.maxCapacity) || 25,
       participants: 0,
-      itinerary_link: '',
-      faq_link: '',
-      whatsapp_link: '',
+      itinerary_link: data?.itineraryLink || '',
+      faq_link: data?.faqLink || '',
+      whatsapp_link: data?.whatsappLink || '',
       price: priceDisplay,
       featured_image:
         data?.coverImageUrl ||
@@ -80,7 +80,24 @@ async function startServer() {
   }
 
   function mapD1Trek(row: any): Trek {
-    const diffRaw = (row.difficulty || 'Easy').toLowerCase();
+    // Prefer data from the nested JSON object if available, as flat columns can get out of sync
+    let d: any = {};
+    try {
+      d = typeof row.data === 'string' ? JSON.parse(row.data) : (row.data || {});
+      // Support data_json column if that's where the worker stores it
+      if (!d.hikeNumber && row.data_json) {
+        const dj = typeof row.data_json === 'string' ? JSON.parse(row.data_json) : row.data_json;
+        d = { ...d, ...dj };
+      }
+    } catch (e) {
+      d = {};
+    }
+
+    const title = d.title || row.title || row.trek_name || 'Walk Nepal Walk Hike';
+    const hikeNum = d.hikeNumber || row.hike_number || row.hikeNumber || '';
+    const date = d.hikeDate || row.hike_date || row.date || '';
+    const diffRaw = (d.overview?.difficulty || row.difficulty || 'Easy').toLowerCase();
+    
     const diff: 'easy' | 'moderate' | 'difficult' =
       diffRaw === 'hard' || diffRaw === 'challenging'
         ? 'difficult'
@@ -88,38 +105,47 @@ async function startServer() {
         ? 'moderate'
         : 'easy';
 
-    const priceDisplay =
-      row.price ||
-      (row.min_price
-        ? `${row.currency || 'NPR'} ${row.min_price}${
-            row.max_price && row.max_price !== row.min_price ? ` - ${row.max_price}` : ''
-          }`
-        : '');
+    let priceDisplay = row.price || "";
+    const prices = (d.priceTiers || []).map((t: any) => Number(t.price) || 0).filter((p: number) => p > 0);
+    if (prices.length > 0) {
+      const min = Math.min(...prices);
+      const max = Math.max(...prices);
+      priceDisplay = max !== min 
+        ? `${d.currency || 'NPR'} ${min.toLocaleString()} - ${max.toLocaleString()}`
+        : `${d.currency || 'NPR'} ${min.toLocaleString()}`;
+    } else if (!priceDisplay && row.min_price) {
+      priceDisplay = `${row.currency || 'NPR'} ${row.min_price}${
+        row.max_price && row.max_price !== row.min_price ? ` - ${row.max_price}` : ''
+      }`;
+    }
 
     return {
-      id: String(row.hike_number || row.id || (row.title || row.trek_name || '').toLowerCase().replace(/[^a-z0-9]+/g, '-')),
-      hike_number: String(row.hike_number || ''),
-      name: row.title || row.trek_name || 'Walk Nepal Walk Hike',
-      date: row.hike_date || row.date || '',
-      days: row.expected_duration || row.days || '1',
+      id: String(row.id || hikeNum || (title || '').toLowerCase().replace(/[^a-z0-9]+/g, '-')),
+      hike_number: String(hikeNum),
+      name: title,
+      date: date,
+      days: d.overview?.expectedDuration || row.expected_duration || row.days || '1',
       difficulty: diff,
-      leader: row.team_leader || 'Walk Nepal Walk Guide',
-      capacity: Number(row.max_capacity) || 25,
-      participants: Number(row.registered_pax) || 0,
-      itinerary_link: row.itinerary_link || '',
-      faq_link: row.faq_link || '',
-      whatsapp_link: row.whatsapp_link || '',
+      leader: d.teamLeader || row.team_leader || row.leader || 'Walk Nepal Walk Guide',
+      capacity: Number(d.maxCapacity || row.max_capacity || row.capacity) || 25,
+      participants: Number(row.registered_pax || row.participants) || 0,
+      itinerary_link: d.itineraryLink || row.itinerary_link || '',
+      faq_link: d.faqLink || row.faq_link || '',
+      whatsapp_link: d.whatsappLink || row.whatsapp_link || '',
       price: priceDisplay,
       featured_image:
+        d.coverImageUrl ||
         row.cover_image_url ||
+        row.featured_image ||
         row.thumbnail_url ||
         'https://images.unsplash.com/photo-1544735716-392fe2489ffa?auto=format&fit=crop&w=1200&q=80',
-      fitness_level: 'All fitness levels',
+      fitness_level: d.overview?.difficulty || 'All fitness levels',
       season: row.season || 'Autumn / Year-round',
-      type_of_trail: row.category || row.type_of_trail || 'Overnight Bus Hike',
-      start_location: row.meeting_point || row.start_location || 'Kathmandu, Nepal',
-      elevation: row.elevation_range || row.elevation || '',
+      type_of_trail: d.category || row.category || row.type_of_trail || 'Overnight Bus Hike',
+      start_location: d.overview?.meetingPoint || row.meeting_point || row.start_location || 'Kathmandu, Nepal',
+      elevation: d.overview?.elevationRange || row.elevation_range || row.elevation || '',
       itinerary: row.itinerary || '',
+      data: d, // Pass through original data
     };
   }
 
@@ -168,6 +194,11 @@ async function startServer() {
           type_of_trail: savedHike.category || mergedTreks[existingIdx].type_of_trail,
           start_location: savedHike.data?.overview?.meetingPoint || mergedTreks[existingIdx].start_location,
           elevation: savedHike.data?.overview?.elevationRange || mergedTreks[existingIdx].elevation,
+          leader: savedHike.data?.teamLeader || mergedTreks[existingIdx].leader,
+          capacity: Number(savedHike.data?.maxCapacity) || mergedTreks[existingIdx].capacity,
+          whatsapp_link: savedHike.data?.whatsappLink || mergedTreks[existingIdx].whatsapp_link,
+          itinerary_link: savedHike.data?.itineraryLink || mergedTreks[existingIdx].itinerary_link,
+          faq_link: savedHike.data?.faqLink || mergedTreks[existingIdx].faq_link,
         };
       } else {
         mergedTreks.unshift(convertedTrek);
@@ -281,7 +312,8 @@ async function startServer() {
     try {
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), 8000);
-      const cfRes = await fetch(`${CLOUDFLARE_WORKER_URL}/treks`, {
+      const cacheBuster = `?t=${Date.now()}`;
+      const cfRes = await fetch(`${CLOUDFLARE_WORKER_URL}/treks${cacheBuster}`, {
         signal: controller.signal,
       });
       clearTimeout(timeoutId);
@@ -322,7 +354,8 @@ async function startServer() {
       try {
         const controller = new AbortController();
         const timeoutId = setTimeout(() => controller.abort(), 7000);
-        const cfRes = await fetch(`${CLOUDFLARE_WORKER_URL}/treks`, {
+        const cacheBuster = `?t=${Date.now()}`;
+        const cfRes = await fetch(`${CLOUDFLARE_WORKER_URL}/treks${cacheBuster}`, {
           signal: controller.signal,
         });
         clearTimeout(timeoutId);
@@ -342,7 +375,10 @@ async function startServer() {
       revalidateTreks().catch(() => {});
     }
 
-    res.json(treks);
+    res.json({
+      success: true,
+      data: treks
+    });
   });
 
   /**
@@ -1177,10 +1213,23 @@ async function startServer() {
   });
 
   // ===== ITINERARY & TREK LIBRARY API =====
-  const itinerariesFilePath = path.join(process.cwd(), 'data', 'itineraries.json');
+  let itinerariesFilePath = path.join(process.cwd(), 'data', 'itineraries.json');
+  const fallbackFilePath = path.join('/tmp', 'itineraries.json');
 
   function loadSavedItineraries(): SavedHikeRecord[] {
     try {
+      // 1. Try reading from the /tmp/itineraries.json fallback first if it exists
+      if (fs.existsSync(fallbackFilePath)) {
+        const raw = fs.readFileSync(fallbackFilePath, 'utf-8');
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          itinerariesFilePath = fallbackFilePath;
+          console.log('[Itineraries] Loaded active database from fallback path:', fallbackFilePath);
+          return parsed;
+        }
+      }
+
+      // 2. Try standard workspace path
       if (fs.existsSync(itinerariesFilePath)) {
         const raw = fs.readFileSync(itinerariesFilePath, 'utf-8');
         const parsed = JSON.parse(raw);
@@ -1202,7 +1251,14 @@ async function startServer() {
       }
       fs.writeFileSync(itinerariesFilePath, JSON.stringify(records, null, 2), 'utf-8');
     } catch (e) {
-      console.error('[Itineraries] Failed saving itineraries to disk:', e);
+      console.error(`[Itineraries] Failed saving to primary path (${itinerariesFilePath}). Retrying fallback...`, e);
+      try {
+        itinerariesFilePath = fallbackFilePath;
+        fs.writeFileSync(itinerariesFilePath, JSON.stringify(records, null, 2), 'utf-8');
+        console.log(`[Itineraries] Successfully saved to fallback path: ${fallbackFilePath}`);
+      } catch (fallbackErr) {
+        console.error('[Itineraries] CRITICAL: Writable disk paths completely unavailable:', fallbackErr);
+      }
     }
   }
 
@@ -1218,13 +1274,14 @@ async function startServer() {
     // Comprehensive payload matching both worker formats
     const payload = {
       id: record.id,
-      hike_number: record.hikeNumber || d?.hikeNumber || 'TBD',
-      hikeNumber: record.hikeNumber || d?.hikeNumber || 'TBD',
+      hike_number: String(record.hikeNumber || d?.hikeNumber || 'TBD'),
+      hikeNumber: String(record.hikeNumber || d?.hikeNumber || 'TBD'),
       title: record.title || d?.title || 'Walk Nepal Walk Hike',
       trek_name: record.title || d?.title || 'Walk Nepal Walk Hike',
       category: record.category || d?.category || 'Overnight Bus Hikes',
       status: record.status || 'published',
       authorEmail: record.authorEmail || 'walknepalwalk@gmail.com',
+      author_email: record.authorEmail || 'walknepalwalk@gmail.com',
       hike_date: d?.hikeDate || '',
       date: d?.hikeDate || '',
       expected_duration: d?.overview?.expectedDuration || '1 Day',
@@ -1240,9 +1297,18 @@ async function startServer() {
       max_price: maxPrice,
       currency: d?.currency || 'NPR',
       price: minPrice ? `${d?.currency || 'NPR'} ${minPrice.toLocaleString()}` : '',
+      team_leader: d?.teamLeader || 'TBD',
+      max_capacity: Number(d?.maxCapacity) || 0,
       data_json: JSON.stringify(d || {}),
       data: d,
     };
+
+    const payloadSize = JSON.stringify(payload).length;
+    console.log(`[Cloudflare D1 Sync] Preparing to sync Hike #${record.hikeNumber}. Payload size: ${Math.round(payloadSize / 1024)}KB`);
+
+    if (payloadSize > 800 * 1024) {
+      console.warn(`[Cloudflare D1 Sync] WARNING: Payload size (${Math.round(payloadSize / 1024)}KB) is approaching Cloudflare's 1MB limit. Large base64 images may cause failures.`);
+    }
 
     // 1. Try POST /treks/sync
     try {
@@ -1250,36 +1316,41 @@ async function startServer() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
-        signal: AbortSignal.timeout(8000),
+        signal: AbortSignal.timeout(10000),
       });
 
       if (res.ok) {
-        console.log(`[Cloudflare D1] Synced Hike #${record.hikeNumber} via /treks/sync`);
+        const syncResp = await res.json().catch(() => ({}));
+        console.log(`[Cloudflare D1] SUCCESS: Synced Hike #${record.hikeNumber} via /treks/sync. Response:`, JSON.stringify(syncResp));
         return { success: true };
       }
 
+      const syncErr = await res.text().catch(() => 'No body');
+      console.warn(`[Cloudflare D1 Sync] Failed /treks/sync Status ${res.status}:`, syncErr);
+
       // If /treks/sync gave 404 or 405, fallback to POST /treks
       if (res.status === 404 || res.status === 405) {
+        console.log(`[Cloudflare D1] /treks/sync not found (404/405), trying fallback /treks...`);
         const fallbackRes = await fetch(`${CLOUDFLARE_WORKER_URL}/treks`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(payload),
-          signal: AbortSignal.timeout(8000),
+          signal: AbortSignal.timeout(10000),
         });
         if (fallbackRes.ok) {
-          console.log(`[Cloudflare D1] Synced Hike #${record.hikeNumber} via /treks`);
+          console.log(`[Cloudflare D1] SUCCESS: Synced Hike #${record.hikeNumber} via /treks`);
           return { success: true };
         }
         const errTxt = await fallbackRes.text();
+        console.error(`[Cloudflare D1 Sync Fallback FAILED] Status ${fallbackRes.status}:`, errTxt);
         return { success: false, error: `Cloudflare HTTP ${fallbackRes.status}: ${errTxt}` };
       }
 
-      const text = await res.text();
-      console.warn(`[Cloudflare D1 Sync HTTP ${res.status}] for Hike #${record.hikeNumber}:`, text);
-      return { success: false, error: `Cloudflare HTTP ${res.status}: ${text}` };
+      console.error(`[Cloudflare D1 Sync FAILED] Status ${res.status}:`, syncErr);
+      return { success: false, error: `Cloudflare HTTP ${res.status}: ${syncErr}` };
     } catch (e: any) {
-      console.warn(`[Cloudflare D1 Sync] Network exception for Hike #${record.hikeNumber}:`, e?.message || e);
-      return { success: false, error: e?.message || 'Network exception' };
+      console.error(`[Cloudflare D1 Sync ERROR] Network/Fetch exception for Hike #${record.hikeNumber}:`, e?.message || e);
+      return { success: false, error: e?.message || 'Network exception connecting to Cloudflare Worker' };
     }
   }
 
@@ -1315,7 +1386,7 @@ async function startServer() {
   });
 
   // POST /api/admin/itineraries - create new hike record
-  app.post('/api/admin/itineraries', (req, res) => {
+  app.post('/api/admin/itineraries', async (req, res) => {
     try {
       const { data, status = 'draft', authorEmail = 'admin@walknepalwalk.com' } = req.body;
       if (!data || !data.title) {
@@ -1344,20 +1415,24 @@ async function startServer() {
       savedItineraries.unshift(newRecord);
       saveItinerariesToDisk(savedItineraries);
 
-      // Async sync to Cloudflare D1
-      syncItineraryToCloudflare(newRecord).catch(() => {});
+      // Await sync to Cloudflare D1
+      const syncResult = await syncItineraryToCloudflare(newRecord);
+      
+      // Refresh public treks list
+      await revalidateTreks().catch(() => {});
 
-      // Immediately refresh public treks list
-      revalidateTreks().catch(() => {});
-
-      return res.status(201).json({ success: true, data: newRecord });
+      return res.status(201).json({ 
+        success: true, 
+        data: newRecord,
+        sync: syncResult
+      });
     } catch (e: any) {
       return res.status(500).json({ success: false, error: e.message });
     }
   });
 
   // PUT /api/admin/itineraries/:id - update or upsert hike record
-  app.put('/api/admin/itineraries/:id', (req, res) => {
+  app.put('/api/admin/itineraries/:id', async (req, res) => {
     try {
       const idx = savedItineraries.findIndex((h) => h.id === req.params.id);
       const { data, status } = req.body;
@@ -1379,8 +1454,8 @@ async function startServer() {
         savedItineraries.unshift(newRecord);
         saveItinerariesToDisk(savedItineraries);
 
-        syncItineraryToCloudflare(newRecord).catch(() => {});
-        return res.status(200).json({ success: true, data: newRecord });
+        const syncResult = await syncItineraryToCloudflare(newRecord);
+        return res.status(200).json({ success: true, data: newRecord, sync: syncResult });
       }
 
       const existing = savedItineraries[idx];
@@ -1398,10 +1473,10 @@ async function startServer() {
       savedItineraries[idx] = updatedRecord;
       saveItinerariesToDisk(savedItineraries);
 
-      syncItineraryToCloudflare(updatedRecord).catch(() => {});
-      revalidateTreks().catch(() => {});
+      const syncResult = await syncItineraryToCloudflare(updatedRecord);
+      await revalidateTreks().catch(() => {});
 
-      return res.json({ success: true, data: updatedRecord });
+      return res.json({ success: true, data: updatedRecord, sync: syncResult });
     } catch (e: any) {
       return res.status(500).json({ success: false, error: e.message });
     }
@@ -1482,6 +1557,50 @@ async function startServer() {
         message: `Synced ${results.filter((r) => r.success).length}/${results.length} treks to Cloudflare D1`,
         results,
       });
+    } catch (e: any) {
+      return res.status(500).json({ success: false, error: e.message });
+    }
+  });
+
+  // POST /api/admin/diagnostics/cloudflare - Test connectivity to Cloudflare Worker
+  app.post('/api/admin/diagnostics/cloudflare', async (req, res) => {
+    try {
+      const results: any = {
+        workerUrl: CLOUDFLARE_WORKER_URL,
+        timestamp: new Date().toISOString(),
+        checks: []
+      };
+
+      // Check 1: GET /treks
+      try {
+        const t1 = Date.now();
+        const cfRes = await fetch(`${CLOUDFLARE_WORKER_URL}/treks`, { signal: AbortSignal.timeout(5000) });
+        results.checks.push({
+          endpoint: '/treks',
+          status: cfRes.status,
+          ok: cfRes.ok,
+          latency: Date.now() - t1,
+          response: await cfRes.text().catch(() => 'No response body')
+        });
+      } catch (e: any) {
+        results.checks.push({ endpoint: '/treks', error: e.message, ok: false });
+      }
+
+      // Check 2: GET /registrations
+      try {
+        const t1 = Date.now();
+        const cfRes = await fetch(`${CLOUDFLARE_WORKER_URL}/registrations`, { signal: AbortSignal.timeout(5000) });
+        results.checks.push({
+          endpoint: '/registrations',
+          status: cfRes.status,
+          ok: cfRes.ok,
+          latency: Date.now() - t1
+        });
+      } catch (e: any) {
+        results.checks.push({ endpoint: '/registrations', error: e.message, ok: false });
+      }
+
+      return res.json({ success: true, ...results });
     } catch (e: any) {
       return res.status(500).json({ success: false, error: e.message });
     }

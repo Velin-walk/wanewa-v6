@@ -81,6 +81,7 @@ export const ItineraryBuilder: React.FC<ItineraryBuilderProps> = ({
   const [saveStatus, setSaveStatus] = useState<string | null>(null);
   const [isSaving, setIsSaving] = useState(false);
   const [isShareModalOpen, setIsShareModalOpen] = useState(false);
+  const [isResetConfirmOpen, setIsResetConfirmOpen] = useState(false);
 
   // Hike Date Interactive Calendar States
   const [datePickerMode, setDatePickerMode] = useState<'single' | 'range' | 'custom'>('single');
@@ -367,19 +368,22 @@ export const ItineraryBuilder: React.FC<ItineraryBuilderProps> = ({
   };
 
   const handleResetToExample = () => {
-    if (window.confirm('Reset template to the Sailung Hike example?')) {
-      const tpl = INITIAL_ITINERARY_TEMPLATE;
-      updateData(() => tpl);
-      setIncludesInputText(tpl.costIncludes.join('\n'));
-      setExcludesInputText(tpl.costExcludes.join('\n'));
-      const map: Record<string, string> = {};
-      tpl.itineraryDays.forEach((d) => {
-        map[d.id] = d.items.map((it) => (it.time ? `${it.time} - ${it.activity}` : it.activity)).join('\n');
-      });
-      setDayScheduleTexts(map);
-      setSaveStatus('Template reset to Sailung sample data');
-      setTimeout(() => setSaveStatus(null), 3000);
-    }
+    setIsResetConfirmOpen(true);
+  };
+
+  const confirmResetToExample = () => {
+    const tpl = INITIAL_ITINERARY_TEMPLATE;
+    updateData(() => tpl);
+    setIncludesInputText(tpl.costIncludes.join('\n'));
+    setExcludesInputText(tpl.costExcludes.join('\n'));
+    const map: Record<string, string> = {};
+    tpl.itineraryDays.forEach((d) => {
+      map[d.id] = d.items.map((it) => (it.time ? `${it.time} - ${it.activity}` : it.activity)).join('\n');
+    });
+    setDayScheduleTexts(map);
+    setSaveStatus('Template reset to Sailung sample data');
+    setTimeout(() => setSaveStatus(null), 3000);
+    setIsResetConfirmOpen(false);
   };
 
   const handleSaveToServer = async (targetStatus?: 'draft' | 'published' | 'archived') => {
@@ -414,10 +418,21 @@ export const ItineraryBuilder: React.FC<ItineraryBuilderProps> = ({
           if (onSaveRecord) {
             onSaveRecord(json.data);
           }
+
+          const syncStatus = json.sync;
+          let syncMsg = '';
+          if (syncStatus) {
+            if (syncStatus.success) {
+              syncMsg = ' (Also synced to Cloudflare D1)';
+            } else {
+              syncMsg = ` (Cloudflare Sync Error: ${syncStatus.error})`;
+            }
+          }
+
           setSaveStatus(
             statusToSave === 'published'
-              ? '🎉 Itinerary published and saved to catalog!'
-              : '✅ Itinerary draft saved successfully!'
+              ? `🎉 Itinerary published and saved to catalog!${syncMsg}`
+              : `✅ Itinerary draft saved successfully!${syncMsg}`
           );
         } else {
           throw new Error('Server returned unsuccessful response');
@@ -446,13 +461,11 @@ export const ItineraryBuilder: React.FC<ItineraryBuilderProps> = ({
         onSaveRecord(fallbackRecord);
       }
       setSaveStatus(
-        statusToSave === 'published'
-          ? '🎉 Itinerary published and saved locally!'
-          : '✅ Itinerary draft saved to local catalog!'
+        `⚠️ Sync Failed: Saved only in browser cache (${err?.message || 'Network error'}). Click Save/Publish again to retry.`
       );
     } finally {
       setIsSaving(false);
-      setTimeout(() => setSaveStatus(null), 4000);
+      setTimeout(() => setSaveStatus(null), 8000);
     }
   };
 
@@ -617,8 +630,16 @@ export const ItineraryBuilder: React.FC<ItineraryBuilderProps> = ({
       </div>
 
       {saveStatus && (
-        <div className="fixed top-5 left-1/2 -translate-x-1/2 z-50 bg-[#1F1F1F] text-white px-5 py-3 rounded-2xl shadow-2xl border border-white/10 flex items-center gap-3 animate-in fade-in slide-in-from-top-4 duration-200">
-          <CheckCircle className="w-5 h-5 text-emerald-400 shrink-0" />
+        <div className={`fixed top-5 left-1/2 -translate-x-1/2 z-50 px-5 py-3 rounded-2xl shadow-2xl border flex items-center gap-3 animate-in fade-in slide-in-from-top-4 duration-200 ${
+          saveStatus.includes('⚠️') || saveStatus.includes('Failed')
+            ? 'bg-[#2D1418] text-rose-100 border-rose-500/30'
+            : 'bg-[#1F1F1F] text-white border-white/10'
+        }`}>
+          {saveStatus.includes('⚠️') || saveStatus.includes('Failed') ? (
+            <XCircle className="w-5 h-5 text-rose-400 shrink-0" />
+          ) : (
+            <CheckCircle className="w-5 h-5 text-emerald-400 shrink-0" />
+          )}
           <span className="text-xs sm:text-sm font-bold">{saveStatus}</span>
           {onBackToList && (
             <button
@@ -671,7 +692,7 @@ export const ItineraryBuilder: React.FC<ItineraryBuilderProps> = ({
               </label>
               <input
                 type="text"
-                value={formData.hikeNumber}
+                value={formData.hikeNumber || ''}
                 onChange={(e) => updateData((prev) => ({ ...prev, hikeNumber: e.target.value }))}
                 placeholder="e.g. 108"
                 className="w-full px-3 py-2 text-xs bg-[#FAF8F5] border border-[#E5E1DB] rounded-xl focus:bg-white focus:outline-[#E08828]"
@@ -685,7 +706,7 @@ export const ItineraryBuilder: React.FC<ItineraryBuilderProps> = ({
               </label>
               <input
                 type="text"
-                value={formData.title}
+                value={formData.title || ''}
                 onChange={(e) => updateData((prev) => ({ ...prev, title: e.target.value }))}
                 placeholder="e.g. Sailung Overnight Hike"
                 className="w-full px-3 py-2 text-xs bg-[#FAF8F5] border border-[#E5E1DB] rounded-xl focus:bg-white focus:outline-[#E08828]"
@@ -713,6 +734,36 @@ export const ItineraryBuilder: React.FC<ItineraryBuilderProps> = ({
                 <option value="Multi Day Treks">Multi Day Treks</option>
                 <option value="Subscription Hikes">Subscription Hikes</option>
               </select>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mt-4">
+            {/* Team Leader */}
+            <div className="sm:col-span-2">
+              <label className="text-[11px] font-bold text-[#5A5551] uppercase tracking-wider block mb-1">
+                Team Leader / Guide
+              </label>
+              <input
+                type="text"
+                value={formData.teamLeader || ''}
+                onChange={(e) => updateData((prev) => ({ ...prev, teamLeader: e.target.value }))}
+                placeholder="e.g. Biraj Thing / Certified Guide"
+                className="w-full px-3 py-2 text-xs bg-[#FAF8F5] border border-[#E5E1DB] rounded-xl focus:bg-white focus:outline-[#E08828]"
+              />
+            </div>
+
+            {/* Max Capacity */}
+            <div>
+              <label className="text-[11px] font-bold text-[#5A5551] uppercase tracking-wider block mb-1">
+                Max Capacity (Hikers)
+              </label>
+              <input
+                type="number"
+                value={formData.maxCapacity || 0}
+                onChange={(e) => updateData((prev) => ({ ...prev, maxCapacity: Number(e.target.value) || 0 }))}
+                placeholder="e.g. 25"
+                className="w-full px-3 py-2 text-xs bg-[#FAF8F5] border border-[#E5E1DB] rounded-xl focus:bg-white focus:outline-[#E08828]"
+              />
             </div>
           </div>
 
@@ -787,10 +838,34 @@ export const ItineraryBuilder: React.FC<ItineraryBuilderProps> = ({
                       const reader = new FileReader();
                       reader.onload = (event) => {
                         if (event.target?.result) {
-                          updateData((prev) => ({
-                            ...prev,
-                            coverImageUrl: String(event.target?.result),
-                          }));
+                          const img = new window.Image();
+                          img.onload = () => {
+                            const canvas = document.createElement('canvas');
+                            let width = img.width;
+                            let height = img.height;
+                            const maxDimension = 1200;
+                            if (width > maxDimension || height > maxDimension) {
+                              if (width > height) {
+                                height = Math.round((height * maxDimension) / width);
+                                width = maxDimension;
+                              } else {
+                                width = Math.round((width * maxDimension) / height);
+                                height = maxDimension;
+                              }
+                            }
+                            canvas.width = width;
+                            canvas.height = height;
+                            const ctx = canvas.getContext('2d');
+                            if (ctx) {
+                              ctx.drawImage(img, 0, 0, width, height);
+                              const compressedUrl = canvas.toDataURL('image/jpeg', 0.75);
+                              updateData((prev) => ({
+                                ...prev,
+                                coverImageUrl: compressedUrl,
+                              }));
+                            }
+                          };
+                          img.src = String(event.target?.result);
                         }
                       };
                       reader.readAsDataURL(file);
@@ -821,6 +896,22 @@ export const ItineraryBuilder: React.FC<ItineraryBuilderProps> = ({
                   </button>
                 </div>
               )}
+            </div>
+
+            {/* External Links Subsection */}
+            <div className="mt-4 pt-4 border-t border-[#F5F2ED]">
+              <div className="max-w-md">
+                <label className="text-[11px] font-bold text-[#5A5551] uppercase tracking-wider block mb-1">
+                  WhatsApp Group Link
+                </label>
+                <input
+                  type="url"
+                  value={formData.whatsappLink || ''}
+                  onChange={(e) => updateData((prev) => ({ ...prev, whatsappLink: e.target.value }))}
+                  placeholder="https://chat.whatsapp.com/..."
+                  className="w-full px-3 py-2 text-xs bg-[#FAF8F5] border border-[#E5E1DB] rounded-xl focus:bg-white focus:outline-[#E08828]"
+                />
+              </div>
             </div>
           </div>
 
@@ -871,7 +962,7 @@ export const ItineraryBuilder: React.FC<ItineraryBuilderProps> = ({
 
                   <input
                     type="text"
-                    value={tier.label}
+                    value={tier.label || ''}
                     onChange={(e) => handleUpdatePriceTier(tier.id, 'label', e.target.value)}
                     placeholder="e.g. Normal Price / Student"
                     className="w-full px-2.5 py-1.5 text-xs bg-white border border-[#E5E1DB] rounded-lg focus:outline-[#E08828]"
@@ -883,7 +974,7 @@ export const ItineraryBuilder: React.FC<ItineraryBuilderProps> = ({
                       type="number"
                       min={0}
                       step={1}
-                      value={tier.price}
+                      value={tier.price || 0}
                       onChange={(e) => handleUpdatePriceTier(tier.id, 'price', e.target.value)}
                       placeholder="e.g. 5500"
                       className="w-full px-2.5 py-1.5 text-xs bg-white border border-[#E5E1DB] rounded-lg font-bold focus:outline-[#E08828]"
@@ -918,7 +1009,7 @@ export const ItineraryBuilder: React.FC<ItineraryBuilderProps> = ({
                 </label>
                 <input
                   type="text"
-                  value={formData.pricingNotes}
+                  value={formData.pricingNotes || ''}
                   onChange={(e) =>
                     updateData((prev) => ({ ...prev, pricingNotes: e.target.value }))
                   }
@@ -1100,7 +1191,7 @@ export const ItineraryBuilder: React.FC<ItineraryBuilderProps> = ({
                 <div className="space-y-1">
                   <input
                     type="text"
-                    value={formData.hikeDate}
+                    value={formData.hikeDate || ''}
                     onChange={(e) => updateData((prev) => ({ ...prev, hikeDate: e.target.value }))}
                     placeholder="e.g. Saturday 12 Sep 2026 or Every Saturday"
                     className="w-full px-3 py-2 text-xs bg-white border border-[#E5E1DB] rounded-xl focus:outline-[#E08828]"
@@ -1134,7 +1225,7 @@ export const ItineraryBuilder: React.FC<ItineraryBuilderProps> = ({
               </label>
               <input
                 type="text"
-                value={formData.overview.meetingTime}
+                value={formData.overview.meetingTime || ''}
                 onChange={(e) =>
                   updateData((prev) => ({
                     ...prev,
@@ -1153,7 +1244,7 @@ export const ItineraryBuilder: React.FC<ItineraryBuilderProps> = ({
               </label>
               <input
                 type="text"
-                value={formData.overview.meetingPoint}
+                value={formData.overview.meetingPoint || ''}
                 onChange={(e) =>
                   updateData((prev) => ({
                     ...prev,
@@ -1172,7 +1263,7 @@ export const ItineraryBuilder: React.FC<ItineraryBuilderProps> = ({
               </label>
               <input
                 type="text"
-                value={formData.overview.expectedDuration}
+                value={formData.overview.expectedDuration || ''}
                 onChange={(e) =>
                   updateData((prev) => ({
                     ...prev,
@@ -1191,7 +1282,7 @@ export const ItineraryBuilder: React.FC<ItineraryBuilderProps> = ({
               </label>
               <input
                 type="text"
-                value={formData.overview.difficulty}
+                value={formData.overview.difficulty || ''}
                 onChange={(e) =>
                   updateData((prev) => ({
                     ...prev,
@@ -1210,7 +1301,7 @@ export const ItineraryBuilder: React.FC<ItineraryBuilderProps> = ({
               </label>
               <input
                 type="text"
-                value={formData.overview.approxDistance}
+                value={formData.overview.approxDistance || ''}
                 onChange={(e) =>
                   updateData((prev) => ({
                     ...prev,
@@ -1229,7 +1320,7 @@ export const ItineraryBuilder: React.FC<ItineraryBuilderProps> = ({
               </label>
               <input
                 type="text"
-                value={formData.overview.elevationRange}
+                value={formData.overview.elevationRange || ''}
                 onChange={(e) =>
                   updateData((prev) => ({
                     ...prev,
@@ -1248,7 +1339,7 @@ export const ItineraryBuilder: React.FC<ItineraryBuilderProps> = ({
               </label>
               <input
                 type="text"
-                value={formData.overview.endingPoint}
+                value={formData.overview.endingPoint || ''}
                 onChange={(e) =>
                   updateData((prev) => ({
                     ...prev,
@@ -1361,7 +1452,7 @@ export const ItineraryBuilder: React.FC<ItineraryBuilderProps> = ({
                 <div className="sm:col-span-5">
                   <input
                     type="text"
-                    value={addon.name}
+                    value={addon.name || ''}
                     onChange={(e) => handleUpdateAddOn(addon.id, 'name', e.target.value)}
                     placeholder="Addon name (e.g. Couple Room)"
                     className="w-full px-2.5 py-1.5 text-xs bg-white border border-[#E5E1DB] rounded-lg"
@@ -1370,7 +1461,7 @@ export const ItineraryBuilder: React.FC<ItineraryBuilderProps> = ({
                 <div className="sm:col-span-3">
                   <input
                     type="number"
-                    value={addon.price}
+                    value={addon.price || 0}
                     onChange={(e) => handleUpdateAddOn(addon.id, 'price', e.target.value)}
                     placeholder="Price (e.g. 1200)"
                     className="w-full px-2.5 py-1.5 text-xs bg-white border border-[#E5E1DB] rounded-lg font-bold"
@@ -1379,7 +1470,7 @@ export const ItineraryBuilder: React.FC<ItineraryBuilderProps> = ({
                 <div className="sm:col-span-3">
                   <input
                     type="text"
-                    value={addon.unit}
+                    value={addon.unit || ''}
                     onChange={(e) => handleUpdateAddOn(addon.id, 'unit', e.target.value)}
                     placeholder="Unit (e.g. per room extra)"
                     className="w-full px-2.5 py-1.5 text-xs bg-white border border-[#E5E1DB] rounded-lg"
@@ -1404,7 +1495,7 @@ export const ItineraryBuilder: React.FC<ItineraryBuilderProps> = ({
             </label>
             <input
               type="text"
-              value={formData.addOnsNotice}
+              value={formData.addOnsNotice || ''}
               onChange={(e) => updateData((prev) => ({ ...prev, addOnsNotice: e.target.value }))}
               placeholder="e.g. *Please inform us for customization so that we can book logistics in advance accordingly*"
               className="w-full px-3 py-2 text-xs bg-[#FAF8F5] border border-[#E5E1DB] rounded-xl focus:bg-white focus:outline-[#E08828]"
@@ -1453,7 +1544,7 @@ export const ItineraryBuilder: React.FC<ItineraryBuilderProps> = ({
                     </span>
                     <input
                       type="text"
-                      value={day.title}
+                      value={day.title || ''}
                       onChange={(e) =>
                         updateData((prev) => ({
                           ...prev,
@@ -1549,7 +1640,7 @@ export const ItineraryBuilder: React.FC<ItineraryBuilderProps> = ({
               </label>
               <textarea
                 rows={3}
-                value={formData.participationGuidelines}
+                value={formData.participationGuidelines || ''}
                 onChange={(e) =>
                   updateData((prev) => ({ ...prev, participationGuidelines: e.target.value }))
                 }
@@ -1563,7 +1654,7 @@ export const ItineraryBuilder: React.FC<ItineraryBuilderProps> = ({
               </label>
               <input
                 type="text"
-                value={formData.helpContacts.join(', ')}
+                value={(formData.helpContacts || []).join(', ')}
                 onChange={(e) =>
                   updateData((prev) => ({
                     ...prev,
@@ -1617,6 +1708,34 @@ export const ItineraryBuilder: React.FC<ItineraryBuilderProps> = ({
           </div>
         </div>
       </div>
+
+      {/* Custom Reset Confirmation Modal */}
+      {isResetConfirmOpen && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-xs z-50 flex items-center justify-center p-4 animate-in fade-in duration-200">
+          <div className="bg-white rounded-3xl max-w-md w-full border border-[#E5E1DB] p-6 shadow-2xl animate-in zoom-in-95 duration-200">
+            <h3 className="text-lg font-black text-[#1F1F1F]">Reset to Example Template?</h3>
+            <p className="text-xs text-[#5A5551] mt-2 leading-relaxed">
+              Are you sure you want to reset all itinerary builder fields to the standard **Sailung Hike** sample template? This will overwrite your current inputs.
+            </p>
+            <div className="flex items-center justify-end gap-2.5 mt-6">
+              <button
+                type="button"
+                onClick={() => setIsResetConfirmOpen(false)}
+                className="px-4 py-2.5 bg-[#FAF8F5] border border-[#E5E1DB] hover:bg-[#F0EBE5] text-[#5A5551] rounded-xl font-bold text-xs transition-colors cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={confirmResetToExample}
+                className="px-4 py-2.5 bg-[#E08828] hover:bg-[#C86B1A] text-white rounded-xl font-bold text-xs shadow-xs transition-colors cursor-pointer"
+              >
+                Reset Template
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

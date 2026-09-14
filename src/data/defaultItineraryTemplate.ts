@@ -37,6 +37,13 @@ export interface TrekItineraryData {
   priceTiers: PriceTier[];
   currency: 'NPR' | 'USD';
   pricingNotes: string;
+  
+  // New basic fields
+  teamLeader: string;
+  maxCapacity: number;
+  whatsappLink?: string;
+  itineraryLink?: string;
+  faqLink?: string;
 
   // Section 2: Hike Date
   hikeDate: string;
@@ -81,6 +88,11 @@ export const INITIAL_ITINERARY_TEMPLATE: TrekItineraryData = {
   coverImageUrl: 'https://images.unsplash.com/photo-1544735716-392fe2489ffa?auto=format&fit=crop&w=1200&q=80',
   currency: 'NPR',
   pricingNotes: 'Normal Package price per person by Scorpio (7/8 pax)',
+  teamLeader: 'Walk Nepal Walk Guide',
+  maxCapacity: 25,
+  whatsappLink: '',
+  itineraryLink: '',
+  faqLink: '',
   priceTiers: [
     { id: '1', label: 'Normal Price', price: 5500 },
     { id: '2', label: 'Student Price', price: 4800 },
@@ -201,6 +213,7 @@ export interface SavedHikeRecord {
   updatedAt: string;
   authorEmail: string;
   data: TrekItineraryData;
+  syncedToCloudflare?: boolean;
 }
 
 export const DEFAULT_SAVED_HIKES: SavedHikeRecord[] = [
@@ -487,6 +500,12 @@ export function generateWhatsAppSummary(hike: SavedHikeRecord | TrekItineraryDat
     )
     .join('\n\n');
 
+  const links = [
+    data.whatsappLink ? `  💬 *WhatsApp Group*: ${data.whatsappLink}` : '',
+    data.itineraryLink ? `  📑 *Full Itinerary (PDF/Link)*: ${data.itineraryLink}` : '',
+    data.faqLink ? `  ❓ *FAQ & Docs*: ${data.faqLink}` : '',
+  ].filter(Boolean).join('\n');
+
   const addOns =
     data.addOns && data.addOns.length > 0
       ? `\n\n*Optional Add-ons:*\n` +
@@ -500,10 +519,11 @@ export function generateWhatsAppSummary(hike: SavedHikeRecord | TrekItineraryDat
 
 📅 *Date:* ${data.hikeDate || 'TBA'}
 📍 *Meeting Point:* ${data.overview.meetingPoint || 'Kathmandu'}
-⏰ *Meeting Time:* ${data.overview.meetingTime || '8:00 AM'}
 ⏱️ *Duration:* ${data.overview.expectedDuration || '6 Hours'}
 ⛰️ *Difficulty:* ${data.overview.difficulty || 'Easy / Moderate'}
 📏 *Distance & Elevation:* ${data.overview.approxDistance} (${data.overview.elevationRange})
+👤 *Team Leader:* ${data.teamLeader || 'TBD'}
+👥 *Max Capacity:* ${data.maxCapacity || 'TBD'} hikers
 
 💰 *Package Pricing:*
 ${priceLines}
@@ -517,6 +537,9 @@ ${exclusions}${addOns}
 
 🗓️ *Day-by-Day Schedule:*
 ${schedule}
+
+🔗 *Important Links:*
+${links || '  (Links provided in coordinator group)'}
 
 📝 *How to Book:*
 1. Review the itinerary and confirm your physical fitness.

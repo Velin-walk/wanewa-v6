@@ -99,8 +99,41 @@ export const TrekCard: React.FC<TrekCardProps> = ({
   const fillPercentage = Math.min(100, Math.round((currentParticipants / trek.capacity) * 100));
 
   return (
-    <div className="bg-white rounded-2xl border border-[#EFEAE4] p-3.5 sm:p-4 shadow-xs hover:shadow-md transition-all duration-200 flex flex-col justify-between w-full max-w-full overflow-hidden">
-      <div>
+    <div className="bg-white rounded-2xl border border-[#EFEAE4] shadow-xs hover:shadow-md transition-all duration-200 flex flex-col justify-between w-full max-w-full overflow-hidden">
+      {/* Card Image */}
+      <div className="relative h-40 sm:h-48 w-full overflow-hidden group">
+        <img
+          src={trek.featured_image}
+          alt={trek.name}
+          className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-105"
+          referrerPolicy="no-referrer"
+        />
+        <div className="absolute inset-0 bg-gradient-to-t from-black/60 via-transparent to-transparent opacity-60" />
+        
+        {/* Price Tag */}
+        {trek.price && (
+          <div className="absolute bottom-3 right-3 bg-[#E08828] text-white text-[10px] font-bold px-2 py-1 rounded-md shadow-sm border border-white/20">
+            {trek.price}
+          </div>
+        )}
+
+        {/* Favorite Button on Image */}
+        <button
+          type="button"
+          onClick={() => onToggleFavorite?.(trek.id)}
+          className={`absolute top-3 right-3 p-2 rounded-xl transition-all active:scale-90 shadow-md ${
+            isFavorited
+              ? 'text-rose-500 bg-white border border-rose-200'
+              : 'text-white bg-black/20 hover:bg-white hover:text-rose-500 backdrop-blur-md border border-white/30'
+          }`}
+          title={isFavorited ? 'Remove from favorites' : 'Save trek'}
+          aria-label="Toggle Favorite"
+        >
+          <Heart className={`w-4 h-4 ${isFavorited ? 'fill-rose-500' : ''}`} />
+        </button>
+      </div>
+
+      <div className="p-3.5 sm:p-4">
         {/* Card Top */}
         <div className="flex items-start justify-between gap-2.5">
           <div className="min-w-0 flex-1">
@@ -140,20 +173,6 @@ export const TrekCard: React.FC<TrekCardProps> = ({
               )}
             </div>
           </div>
-
-          <button
-            type="button"
-            onClick={() => onToggleFavorite?.(trek.id)}
-            className={`p-2.5 rounded-xl transition-all shrink-0 active:scale-90 ${
-              isFavorited
-                ? 'text-rose-500 bg-rose-50 border border-rose-200'
-                : 'text-[#8B8680] hover:text-rose-500 bg-[#F9F7F5] border border-[#E5E1DB]'
-            }`}
-            title={isFavorited ? 'Remove from favorites' : 'Save trek'}
-            aria-label="Toggle Favorite"
-          >
-            <Heart className={`w-4 h-4 ${isFavorited ? 'fill-rose-500' : ''}`} />
-          </button>
         </div>
 
         {/* Stats Row */}
@@ -226,32 +245,6 @@ export const TrekCard: React.FC<TrekCardProps> = ({
           </div>
         )}
 
-        {/* Live Itinerary & FAQ Buttons */}
-        {(trek.itinerary_link || trek.faq_link) && (
-          <div className="flex items-center gap-1.5 mt-2.5 pt-2 border-t border-[#F0EBE5] flex-wrap">
-            {trek.itinerary_link && (
-              <button
-                type="button"
-                onClick={() => onViewItinerary ? onViewItinerary(trek) : window.open(trek.itinerary_link, '_blank')}
-                className="inline-flex items-center gap-1 px-2.5 py-1 text-[11px] font-semibold text-[#E08828] hover:text-[#C86B1A] bg-[#E08828]/10 hover:bg-[#E08828]/15 rounded-lg transition-all"
-              >
-                <FileText className="w-3.5 h-3.5" />
-                <span>View Itinerary</span>
-              </button>
-            )}
-            {trek.faq_link && (
-              <button
-                type="button"
-                onClick={() => onViewFaq ? onViewFaq(trek) : window.open(trek.faq_link, '_blank')}
-                className="inline-flex items-center gap-1 px-2.5 py-1 text-[11px] font-semibold text-[#5A5551] hover:text-[#1F1F1F] bg-[#F4EFEA] hover:bg-[#EAE4DC] rounded-lg transition-all"
-              >
-                <HelpCircle className="w-3.5 h-3.5 text-[#8B8680]" />
-                <span>FAQ</span>
-              </button>
-            )}
-          </div>
-        )}
-
         {/* In-card text itinerary if available */}
         {trek.itinerary && (
           <div className="mt-1.5 text-xs">
@@ -280,13 +273,22 @@ export const TrekCard: React.FC<TrekCardProps> = ({
       </div>
 
       {/* Action Buttons */}
-      <div className="grid grid-cols-2 gap-2 mt-3 pt-2.5 border-t border-[#F0EBE5]">
+      <div className="grid grid-cols-3 gap-1.5 mt-3 pt-2.5 border-t border-[#F0EBE5]">
+        <button
+          type="button"
+          onClick={() => onViewItinerary?.(trek)}
+          className="flex items-center justify-center gap-1 min-h-[44px] px-1 text-xs font-semibold text-[#E08828] bg-[#E08828]/10 hover:bg-[#E08828]/15 border border-[#E08828]/20 rounded-xl active:scale-[0.98] transition-all cursor-pointer"
+        >
+          <FileText className="w-3.5 h-3.5 shrink-0" />
+          <span>Itinerary</span>
+        </button>
+
         <button
           type="button"
           onClick={() => onShare(trek)}
-          className="flex items-center justify-center gap-1.5 min-h-[44px] px-3 text-xs font-semibold text-[#5A5551] bg-[#F9F7F5] hover:bg-[#F0ECE7] border border-[#E5E1DB] rounded-xl active:scale-[0.98] transition-all"
+          className="flex items-center justify-center gap-1.5 min-h-[44px] px-1 text-xs font-semibold text-[#5A5551] bg-[#F9F7F5] hover:bg-[#F0ECE7] border border-[#E5E1DB] rounded-xl active:scale-[0.98] transition-all cursor-pointer"
         >
-          <Share2 className="w-3.5 h-3.5 text-[#E08828]" />
+          <Share2 className="w-3.5 h-3.5 text-[#E08828] shrink-0" />
           <span>Invite</span>
         </button>
 
@@ -294,13 +296,13 @@ export const TrekCard: React.FC<TrekCardProps> = ({
           type="button"
           disabled={isFull}
           onClick={() => onRegister(trek)}
-          className={`flex items-center justify-center gap-1.5 min-h-[44px] px-3 text-xs font-bold rounded-xl transition-all text-white ${
+          className={`flex items-center justify-center gap-1.5 min-h-[44px] px-1 text-xs font-bold rounded-xl transition-all text-white cursor-pointer ${
             isFull
               ? 'bg-[#8B8680] cursor-not-allowed opacity-70'
               : 'bg-[#7ABA42] hover:bg-[#6CA838] active:scale-[0.98] shadow-xs'
           }`}
         >
-          {isFull ? 'Waitlist' : 'Register'}
+          <span>{isFull ? 'Waitlist' : 'Register'}</span>
         </button>
       </div>
     </div>

@@ -8,7 +8,9 @@ import {
   FileText,
   Shield,
   Layers,
-  Plus
+  Plus,
+  RefreshCw,
+  AlertTriangle
 } from 'lucide-react';
 import { ItineraryBuilder } from './ItineraryBuilder';
 import { HikeLibraryList } from './HikeLibraryList';
@@ -27,6 +29,11 @@ export default function AdminDashboard({ currentUserEmail }: AdminDashboardProps
   const [loadingHikes, setLoadingHikes] = useState(true);
   const [editingHike, setEditingHike] = useState<SavedHikeRecord | null>(null);
 
+  // Unsynced cache auto-recovery and migration logic
+  const [serverHikeIds, setServerHikeIds] = useState<string[]>([]);
+  const [isSyncingAll, setIsSyncingAll] = useState(false);
+  const [syncMessage, setSyncMessage] = useState<string | null>(null);
+
   // Community Map Moderation State
   const [trails, setTrails] = useState<any[]>([]);
   const [loadingTrails, setLoadingTrails] = useState(false);
@@ -41,6 +48,20 @@ export default function AdminDashboard({ currentUserEmail }: AdminDashboardProps
     }
   }, [activeTab]);
 
+  const getUnsyncedLocalHikes = (serverHikes: SavedHikeRecord[]): SavedHikeRecord[] => {
+    const cached = localStorage.getItem('wnw_saved_itineraries_cache');
+    if (!cached) return [];
+    try {
+      const parsed = JSON.parse(cached);
+      if (!Array.isArray(parsed)) return [];
+      const serverIds = new Set(serverHikes.map(h => h.id));
+      // Unsynced hikes are those in local storage whose IDs are not in serverIds
+      return parsed.filter(h => h && h.id && !serverIds.has(h.id));
+    } catch {
+      return [];
+    }
+  };
+
   const fetchItineraries = async () => {
     setLoadingHikes(true);
     try {
@@ -48,8 +69,15 @@ export default function AdminDashboard({ currentUserEmail }: AdminDashboardProps
       if (res.ok) {
         const json = await res.json();
         if (json.success && Array.isArray(json.data) && json.data.length > 0) {
-          setHikes(json.data);
-          localStorage.setItem('wnw_saved_itineraries_cache', JSON.stringify(json.data));
+          const serverHikes = json.data;
+          setServerHikeIds(serverHikes.map(h => h.id));
+
+          // Compute hikes from local cache that are not present on the server
+          const unsynced = getUnsyncedLocalHikes(serverHikes);
+          const merged = [...unsynced, ...serverHikes];
+
+          setHikes(merged);
+          localStorage.setItem('wnw_saved_itineraries_cache', JSON.stringify(merged));
           return;
         }
       }
@@ -78,6 +106,107 @@ export default function AdminDashboard({ currentUserEmail }: AdminDashboardProps
     } finally {
       setLoadingHikes(false);
     }
+  };
+
+  const normalizeLocalHikeToUpload = (h: any): SavedHikeRecord => {
+    // If h already has a nested data object with a title, it's correct!
+    if (h && h.data && typeof h.data === 'object' && h.data.title) {
+      return h;
+    }
+
+    // Otherwise, h is a flat, old-style itinerary record. Let's dynamically map all its flat fields into the nested 'data' structure!
+    const dataObj: any = {
+      hikeNumber: h.hikeNumber || h.hike_number || '',
+      title: h.title || h.name || 'Untitled Hike',
+      category: h.category || 'Overnight Bus Hikes',
+      coverImageUrl: h.coverImageUrl || h.cover_image_url || h.featured_image || '',
+      hikeDate: h.hikeDate || h.hike_date || h.date || '',
+      teamLeader: h.teamLeader || h.team_leader || h.leader || 'Walk Nepal Walk Guide',
+      maxCapacity: Number(h.maxCapacity || h.max_capacity || h.capacity) || 25,
+      whatsappLink: h.whatsappLink || h.whatsapp_link || '',
+      itineraryLink: h.itineraryLink || h.itinerary_link || '',
+      faqLink: h.faqLink || h.faq_link || '',
+      currency: h.currency || 'NPR',
+      pricingNotes: h.pricingNotes || h.price || '',
+      priceTiers: h.priceTiers || (h.price ? [{ id: 't1', label: 'Standard Price', price: parseInt(String(h.price).replace(/[^0-9]/g, '')) || 0 }] : []),
+      overview: h.overview || {
+        meetingTime: h.meetingTime || h.start_location || '',
+        meetingPoint: h.meetingPoint || h.start_location || '',
+        expectedDuration: h.expectedDuration || h.days || '1 Day',
+        difficulty: h.difficulty || 'Easy',
+        approxDistance: h.approxDistance || h.distance || '',
+        elevationRange: h.elevationRange || h.elevation || '',
+        elevationGross: h.elevationGross || '',
+        endingPoint: h.endingPoint || '',
+      },
+      costIncludes: h.costIncludes || [],
+      costExcludes: h.costExcludes || [],
+      addOns: h.addOns || [],
+      addOnsNotice: h.addOnsNotice || '',
+      itineraryDays: h.itineraryDays || [],
+      bookingProcessSteps: h.bookingProcessSteps || [],
+      bookingNotes: h.bookingNotes || [],
+      participationGuidelines: h.participationGuidelines || '',
+      safetyRules: h.safetyRules || [],
+      helpContacts: h.helpContacts || [],
+    };
+
+    return {
+      id: h.id || `hike-draft-${Date.now().toString(36)}`,
+      hikeNumber: dataObj.hikeNumber,
+      title: dataObj.title,
+      category: dataObj.category,
+      status: h.status || 'published',
+      createdAt: h.createdAt || new Date().toISOString(),
+      updatedAt: h.updatedAt || new Date().toISOString(),
+      authorEmail: h.authorEmail || 'walknepalwalk@gmail.com',
+      data: dataObj,
+    };
+  };
+
+  const handleSyncUnsyncedHikes = async () => {
+    const unsyncedList = hikes.filter(h => !serverHikeIds.includes(h.id));
+    if (unsyncedList.length === 0) return;
+
+    setIsSyncingAll(true);
+    setSyncMessage(`Syncing ${unsyncedList.length} local itineraries to server database...`);
+    let successCount = 0;
+
+    for (const rawUnsynced of unsyncedList) {
+      try {
+        const unsynced = normalizeLocalHikeToUpload(rawUnsynced);
+        console.log('[Sync Engine] Uploading normalized itinerary:', unsynced.title);
+
+        const res = await apiFetch('admin/itineraries', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            data: unsynced.data,
+            status: unsynced.status,
+            authorEmail: unsynced.authorEmail || currentUserEmail || 'walknepalwalk@gmail.com',
+          }),
+        });
+
+        if (res.ok) {
+          const resJson = await res.json().catch(() => ({}));
+          if (resJson.success) {
+            successCount++;
+          } else {
+            console.warn('[Sync Engine] Server rejected synced hike:', resJson.error);
+          }
+        } else {
+          const text = await res.text().catch(() => 'No response body');
+          console.error('[Sync Engine] Server returned error status:', res.status, text);
+        }
+      } catch (err) {
+        console.error('Failed to sync hike:', rawUnsynced.title, err);
+      }
+    }
+
+    setSyncMessage(`🎉 Successfully synced ${successCount} of ${unsyncedList.length} local itineraries to server database!`);
+    await fetchItineraries();
+    setIsSyncingAll(false);
+    setTimeout(() => setSyncMessage(null), 6000);
   };
 
   const fetchPendingTrails = async () => {
@@ -202,8 +331,126 @@ export default function AdminDashboard({ currentUserEmail }: AdminDashboardProps
     setEditingHike(savedRecord);
   };
 
+  const [healthStatus, setHealthStatus] = useState<any>(null);
+  const [isCheckingHealth, setIsCheckingHealth] = useState(false);
+  const [isBulkSyncing, setIsBulkSyncing] = useState(false);
+
+  const checkHealth = async () => {
+    setIsCheckingHealth(true);
+    try {
+      const res = await apiFetch('admin/diagnostics/cloudflare', { method: 'POST' });
+      const json = await res.json();
+      setHealthStatus(json);
+    } catch (e: any) {
+      setHealthStatus({ success: false, error: e.message });
+    } finally {
+      setIsCheckingHealth(false);
+    }
+  };
+
+  const handleBulkSyncToCloudflare = async () => {
+    setIsBulkSyncing(true);
+    setSyncMessage('☁️ Syncing all server-saved itineraries to Cloudflare D1...');
+    try {
+      const res = await apiFetch('admin/sync-all-to-cloudflare', { method: 'POST' });
+      if (res.ok) {
+        const json = await res.json();
+        if (json.success) {
+          setSyncMessage(`🎉 ${json.message || 'Successfully synced all server itineraries to Cloudflare D1!'}`);
+        } else {
+          setSyncMessage(`⚠️ Sync Error: ${json.error || 'Server rejected bulk sync'}`);
+        }
+      } else {
+        setSyncMessage('⚠️ Network error during bulk sync.');
+      }
+    } catch (e: any) {
+      setSyncMessage(`⚠️ Bulk Sync Exception: ${e.message}`);
+    } finally {
+      setIsBulkSyncing(false);
+      setTimeout(() => setSyncMessage(null), 6000);
+    }
+  };
+
   return (
     <div className="w-full space-y-4">
+      {/* System Health Banner */}
+      {activeTab === 'library' && (
+        <div className="bg-white px-4 py-2 rounded-xl border border-[#E5E1DB] flex flex-col sm:flex-row items-start sm:items-center justify-between text-[11px] font-bold gap-2 sm:gap-0">
+          <div className="flex items-center gap-3">
+            <span className="text-[#8B8680]">Cloudflare D1 Connection:</span>
+            {healthStatus ? (
+              healthStatus.success && healthStatus.checks?.every((c: any) => c.ok) ? (
+                <span className="text-emerald-600 flex items-center gap-1">
+                  <CheckCircle className="w-3.5 h-3.5" /> Healthy
+                </span>
+              ) : (
+                <span className="text-rose-600 flex items-center gap-1">
+                  <XCircle className="w-3.5 h-3.5" /> Issue Detected
+                </span>
+              )
+            ) : (
+              <span className="text-[#8B8680]">Not checked</span>
+            )}
+          </div>
+          <div className="flex items-center gap-4">
+            <button 
+              onClick={checkHealth}
+              disabled={isCheckingHealth}
+              className="text-[#E08828] hover:underline cursor-pointer disabled:opacity-50"
+            >
+              {isCheckingHealth ? 'Checking...' : 'Run Diagnostics'}
+            </button>
+            <span className="text-[#E5E1DB] hidden sm:inline">|</span>
+            <button
+              onClick={handleBulkSyncToCloudflare}
+              disabled={isBulkSyncing}
+              className="text-purple-600 hover:underline cursor-pointer disabled:opacity-50 flex items-center gap-1"
+            >
+              {isBulkSyncing ? (
+                <>
+                  <RefreshCw className="w-3 h-3 animate-spin" /> Syncing D1...
+                </>
+              ) : (
+                <>☁️ Bulk Sync Server to D1</>
+              )}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Unsynced Local-Cache Warning Banner */}
+      {activeTab === 'library' && hikes.filter(h => !serverHikeIds.includes(h.id)).length > 0 && (
+        <div className="bg-[#FFF9F2] border border-[#F3E0C8] p-4 rounded-2xl flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 animate-in fade-in slide-in-from-top-2 duration-200">
+          <div className="flex gap-2.5 items-start">
+            <AlertTriangle className="w-5 h-5 text-[#E08828] shrink-0 mt-0.5" />
+            <div>
+              <h4 className="text-xs font-bold text-[#6B3E08]">Unsynced Itineraries Found in Your Browser</h4>
+              <p className="text-[11px] text-[#8C5D23] mt-0.5">
+                We detected {hikes.filter(h => !serverHikeIds.includes(h.id)).length} itinerary templates (including Hike #117, #116, #119 etc.) saved only in this browser's local cache. Since the server database was previously read-only, they haven't been synchronized. Click Sync to upload them now!
+              </p>
+            </div>
+          </div>
+          <button
+            onClick={handleSyncUnsyncedHikes}
+            disabled={isSyncingAll}
+            className="w-full sm:w-auto shrink-0 flex items-center justify-center gap-1.5 px-4 py-2 bg-[#E08828] hover:bg-[#C86B1A] disabled:bg-[#E08828]/50 text-white text-xs font-bold rounded-xl shadow-xs transition-all cursor-pointer active:scale-95 whitespace-nowrap"
+          >
+            {isSyncingAll ? (
+              <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+            ) : (
+              <RefreshCw className="w-3.5 h-3.5" />
+            )}
+            <span>{isSyncingAll ? 'Syncing...' : 'Sync to Server Database'}</span>
+          </button>
+        </div>
+      )}
+
+      {syncMessage && (
+        <div className="bg-[#E6F4EA] border border-[#B7E1CD] text-[#137333] px-4 py-3 rounded-2xl text-xs font-bold animate-in fade-in duration-200">
+          {syncMessage}
+        </div>
+      )}
+
       {/* Admin Sub-navigation Segment */}
       <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between bg-white p-2 sm:p-2.5 rounded-2xl border border-[#E5E1DB] shadow-2xs gap-2">
         <div className="flex items-center gap-1.5 sm:gap-2 overflow-x-auto">
