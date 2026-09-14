@@ -57,75 +57,72 @@ export default function MapMinersDashboard({
     return () => window.removeEventListener('resize', handleResize);
   }, []);
 
-  // Load KML files from /mapminers/kml/routes-metadata.json
+  // Load trails from Cloudflare D1 via backend API
   const loadKMLFolder = useCallback(async () => {
     setLoadingState({ status: 'loading', errors: [] });
     setRoutes([]);
 
     try {
-      let combinedRoutes: any[] = [];
-      const manifestUrl = resolveAssetUrl(`/mapminers/kml/routes-metadata.json?t=${Date.now()}`);
-      const manifestRes = await fetch(manifestUrl);
-      if (!manifestRes.ok) throw new Error('routes-metadata.json not found');
-      
-      const metadataMap = await manifestRes.json();
-      const loadedRoutes = Object.entries(metadataMap).map(([fileName, anyMeta]: [string, any]) => {
-        return {
-          id: Math.random().toString(36).substring(2, 11),
-          fileName: fileName,
-          name: anyMeta.name,
-          description: anyMeta.description || '',
-          difficulty: anyMeta.difficultyOverride !== 'Auto' ? anyMeta.difficultyOverride : anyMeta.calculatedDifficulty,
-          stats: {
-            ...anyMeta.stats,
-            estimatedHours: anyMeta.hoursOverride !== 'Auto' ? anyMeta.hoursOverride : anyMeta.stats?.estimatedHours
-          },
-          province: anyMeta.province || 'Bagmati',
-          district: anyMeta.district || 'Kathmandu',
-          nearbyCity: anyMeta.nearbyCity || 'Kathmandu',
-          highlights: anyMeta.highlights || '',
-          uploadedAt: anyMeta.uploadedAt || new Date().toISOString(),
-          contributorEmail: anyMeta.contributorEmail || '',
-          contributorName: anyMeta.contributorName || 'Community Member',
-          bounds: anyMeta.bounds,
-          coordinates: anyMeta.startPos ? [anyMeta.startPos, anyMeta.startPos] : [],
-          isLazyLoaded: false
-        };
-      });
+      const parseStartPos = (pos: any): { lat: number; lng: number } | null => {
+        if (!pos) return null;
+        if (typeof pos.lat === 'number' && !isNaN(pos.lat) && typeof pos.lng === 'number' && !isNaN(pos.lng)) {
+          return { lat: pos.lat, lng: pos.lng };
+        }
+        if (Array.isArray(pos) && pos.length >= 2 && typeof pos[0] === 'number' && typeof pos[1] === 'number' && !isNaN(pos[0]) && !isNaN(pos[1])) {
+          return { lat: pos[0], lng: pos[1] };
+        }
+        return null;
+      };
 
-      if (loadedRoutes.length === 0) {
-        setRoutes(generateDemoRoutes());
-      } else {
-        combinedRoutes = [...combinedRoutes, ...loadedRoutes];
-      }
-      
-      try {
-        const communityRes = await apiFetch('mapminers/trails');
-        if (communityRes.ok) {
-          const communityData = await communityRes.json();
-          if (communityData.success && communityData.data) {
-            const communityRoutes = Object.entries(communityData.data).map(([fileName, anyMeta]: [string, any]) => ({
+      const communityRes = await apiFetch('mapminers/trails');
+      if (communityRes.ok) {
+        const communityData = await communityRes.json();
+        if (communityData.success && communityData.data && Object.keys(communityData.data).length > 0) {
+          const loadedRoutes = Object.entries(communityData.data).map(([fileName, anyMeta]: [string, any]) => {
+            const startPosObj = parseStartPos(anyMeta.startPos);
+            return {
               ...anyMeta,
               id: anyMeta.id || Math.random().toString(36).substring(2, 11),
               fileName: fileName,
-              coordinates: anyMeta.startPos ? [anyMeta.startPos, anyMeta.startPos] : [],
+              name: anyMeta.name || 'Untitled Route',
+              description: anyMeta.description || '',
+              difficulty: anyMeta.difficultyOverride !== 'Auto' ? anyMeta.difficultyOverride : (anyMeta.calculatedDifficulty || 'Moderate'),
+              stats: {
+                distance: 0,
+                elevationGain: 0,
+                elevationLoss: 0,
+                minElevation: 0,
+                maxElevation: 0,
+                ...anyMeta.stats,
+                estimatedHours: anyMeta.hoursOverride !== 'Auto' ? anyMeta.hoursOverride : (anyMeta.stats?.estimatedHours || 0)
+              },
+              province: anyMeta.province || 'Bagmati',
+              district: anyMeta.district || 'Kathmandu',
+              nearbyCity: anyMeta.nearbyCity || 'Kathmandu',
+              highlights: anyMeta.highlights || '',
+              uploadedAt: anyMeta.uploadedAt || new Date().toISOString(),
+              contributorEmail: anyMeta.contributorEmail || '',
+              contributorName: anyMeta.contributorName || 'Community Member',
+              bounds: anyMeta.bounds,
+              coordinates: startPosObj ? [startPosObj, startPosObj] : [],
               isLazyLoaded: false,
               isCommunityTrail: true
-            }));
-            combinedRoutes = [...combinedRoutes, ...communityRoutes];
-          }
+            };
+          });
+
+          loadedRoutes.sort((a, b) => new Date(b.uploadedAt).getTime() - new Date(a.uploadedAt).getTime());
+          setRoutes(loadedRoutes);
+          setLoadingState({ status: 'done', errors: [] });
+          return;
         }
-      } catch (err) {
-        console.error("Failed fetching community trails:", err);
       }
 
-      if (combinedRoutes.length > 0) {
-        combinedRoutes.sort((a, b) => new Date(b.uploadedAt).getTime() - new Date(a.uploadedAt).getTime());
-        setRoutes(combinedRoutes);
-      }
+      // Fallback to offline demo routes if Cloudflare returns empty
+      console.warn('No Cloudflare trails returned, providing demo routes.');
+      setRoutes(generateDemoRoutes());
       setLoadingState({ status: 'done', errors: [] });
     } catch (e: any) {
-      console.warn('Failed to fetch manifest, falling back to offline demo routes:', e);
+      console.warn('Failed to fetch Cloudflare trails, falling back to offline demo routes:', e);
       setRoutes(generateDemoRoutes());
       setLoadingState({ status: 'done', errors: [] });
     } finally {
@@ -149,15 +146,8 @@ export default function MapMinersDashboard({
 
     if (!route.isLazyLoaded && !route.isDemo) {
       try {
-        let res: Response;
-        if (route.isCommunityTrail) {
-          // Download directly from Cloudflare Worker which pulls from R2
-          res = await apiFetch(`mapminers/download/${encodeURIComponent(route.fileName)}`);
-        } else {
-          // Official maps hosted statically on Cloudflare Pages
-          const fileUrl = resolveAssetUrl(`/mapminers/kml/${encodeURIComponent(route.fileName)}?t=${Date.now()}`);
-          res = await fetch(fileUrl);
-        }
+        // Download directly from Cloudflare Worker which pulls from R2
+        const res = await apiFetch(`mapminers/download/${encodeURIComponent(route.fileName)}`);
 
         if (!res.ok) throw new Error(`HTTP ${res.status} while loading ${route.fileName}`);
         const text = await res.text();

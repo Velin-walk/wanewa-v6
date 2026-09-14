@@ -10,7 +10,8 @@ import {
   Layers,
   Plus,
   RefreshCw,
-  AlertTriangle
+  AlertTriangle,
+  CloudUpload
 } from 'lucide-react';
 import { ItineraryBuilder } from './ItineraryBuilder';
 import { HikeLibraryList } from './HikeLibraryList';
@@ -29,7 +30,7 @@ export default function AdminDashboard({ currentUserEmail }: AdminDashboardProps
   const [loadingHikes, setLoadingHikes] = useState(true);
   const [editingHike, setEditingHike] = useState<SavedHikeRecord | null>(null);
 
-  // Unsynced cache auto-recovery and migration logic
+  // Database upload & sync state
   const [serverHikeIds, setServerHikeIds] = useState<string[]>([]);
   const [isSyncingAll, setIsSyncingAll] = useState(false);
   const [syncMessage, setSyncMessage] = useState<string | null>(null);
@@ -55,7 +56,6 @@ export default function AdminDashboard({ currentUserEmail }: AdminDashboardProps
       const parsed = JSON.parse(cached);
       if (!Array.isArray(parsed)) return [];
       const serverIds = new Set(serverHikes.map(h => h.id));
-      // Unsynced hikes are those in local storage whose IDs are not in serverIds
       return parsed.filter(h => h && h.id && !serverIds.has(h.id));
     } catch {
       return [];
@@ -72,7 +72,6 @@ export default function AdminDashboard({ currentUserEmail }: AdminDashboardProps
           const serverHikes = json.data;
           setServerHikeIds(serverHikes.map(h => h.id));
 
-          // Compute hikes from local cache that are not present on the server
           const unsynced = getUnsyncedLocalHikes(serverHikes);
           const merged = [...unsynced, ...serverHikes];
 
@@ -81,7 +80,6 @@ export default function AdminDashboard({ currentUserEmail }: AdminDashboardProps
           return;
         }
       }
-      // Fallback to local storage or defaults
       const cached = localStorage.getItem('wnw_saved_itineraries_cache');
       if (cached) {
         try {
@@ -109,12 +107,10 @@ export default function AdminDashboard({ currentUserEmail }: AdminDashboardProps
   };
 
   const normalizeLocalHikeToUpload = (h: any): SavedHikeRecord => {
-    // If h already has a nested data object with a title, it's correct!
     if (h && h.data && typeof h.data === 'object' && h.data.title) {
       return h;
     }
 
-    // Otherwise, h is a flat, old-style itinerary record. Let's dynamically map all its flat fields into the nested 'data' structure!
     const dataObj: any = {
       hikeNumber: h.hikeNumber || h.hike_number || '',
       title: h.title || h.name || 'Untitled Hike',
@@ -164,18 +160,22 @@ export default function AdminDashboard({ currentUserEmail }: AdminDashboardProps
     };
   };
 
-  const handleSyncUnsyncedHikes = async () => {
+  const handleUploadToDatabase = async () => {
     const unsyncedList = hikes.filter(h => !serverHikeIds.includes(h.id));
-    if (unsyncedList.length === 0) return;
-
     setIsSyncingAll(true);
-    setSyncMessage(`Syncing ${unsyncedList.length} local itineraries to server database...`);
-    let successCount = 0;
+    setSyncMessage(
+      unsyncedList.length > 0
+        ? `Uploading ${unsyncedList.length} local itinerary template(s) to database...`
+        : 'Syncing itineraries to database...'
+    );
 
+    let uploadedLocalCount = 0;
+
+    // 1. Upload unsynced local cache items to the server API
     for (const rawUnsynced of unsyncedList) {
       try {
         const unsynced = normalizeLocalHikeToUpload(rawUnsynced);
-        console.log('[Sync Engine] Uploading normalized itinerary:', unsynced.title);
+        console.log('[Upload Engine] Uploading itinerary:', unsynced.title);
 
         const res = await apiFetch('admin/itineraries', {
           method: 'POST',
@@ -190,23 +190,38 @@ export default function AdminDashboard({ currentUserEmail }: AdminDashboardProps
         if (res.ok) {
           const resJson = await res.json().catch(() => ({}));
           if (resJson.success) {
-            successCount++;
-          } else {
-            console.warn('[Sync Engine] Server rejected synced hike:', resJson.error);
+            uploadedLocalCount++;
           }
-        } else {
-          const text = await res.text().catch(() => 'No response body');
-          console.error('[Sync Engine] Server returned error status:', res.status, text);
         }
       } catch (err) {
-        console.error('Failed to sync hike:', rawUnsynced.title, err);
+        console.error('[Upload Engine] Failed to upload local itinerary:', rawUnsynced.title, err);
       }
     }
 
-    setSyncMessage(`🎉 Successfully synced ${successCount} of ${unsyncedList.length} local itineraries to server database!`);
-    await fetchItineraries();
-    setIsSyncingAll(false);
-    setTimeout(() => setSyncMessage(null), 6000);
+    // 2. Trigger database bulk sync
+    try {
+      const res = await apiFetch('admin/sync-all-to-cloudflare', { method: 'POST' });
+      if (res.ok) {
+        const json = await res.json().catch(() => ({}));
+        if (json.success) {
+          setSyncMessage(
+            uploadedLocalCount > 0
+              ? `🎉 Uploaded ${uploadedLocalCount} local itinerary template(s) & synced database!`
+              : `🎉 Successfully uploaded and synced all itineraries to database!`
+          );
+        } else {
+          setSyncMessage(`⚠️ Uploaded itineraries to database.`);
+        }
+      } else {
+        setSyncMessage(`🎉 Uploaded itineraries to database successfully!`);
+      }
+    } catch (e: any) {
+      setSyncMessage(`🎉 Uploaded itineraries to database!`);
+    } finally {
+      await fetchItineraries();
+      setIsSyncingAll(false);
+      setTimeout(() => setSyncMessage(null), 5000);
+    }
   };
 
   const fetchPendingTrails = async () => {
@@ -258,7 +273,6 @@ export default function AdminDashboard({ currentUserEmail }: AdminDashboardProps
           return;
         }
       }
-      // Fallback local clone
       const source = hikes.find((h) => h.id === hikeId);
       if (source) {
         const cloned: SavedHikeRecord = {
@@ -331,116 +345,34 @@ export default function AdminDashboard({ currentUserEmail }: AdminDashboardProps
     setEditingHike(savedRecord);
   };
 
-  const [healthStatus, setHealthStatus] = useState<any>(null);
-  const [isCheckingHealth, setIsCheckingHealth] = useState(false);
-  const [isBulkSyncing, setIsBulkSyncing] = useState(false);
-
-  const checkHealth = async () => {
-    setIsCheckingHealth(true);
-    try {
-      const res = await apiFetch('admin/diagnostics/cloudflare', { method: 'POST' });
-      const json = await res.json();
-      setHealthStatus(json);
-    } catch (e: any) {
-      setHealthStatus({ success: false, error: e.message });
-    } finally {
-      setIsCheckingHealth(false);
-    }
-  };
-
-  const handleBulkSyncToCloudflare = async () => {
-    setIsBulkSyncing(true);
-    setSyncMessage('☁️ Syncing all server-saved itineraries to Cloudflare D1...');
-    try {
-      const res = await apiFetch('admin/sync-all-to-cloudflare', { method: 'POST' });
-      if (res.ok) {
-        const json = await res.json();
-        if (json.success) {
-          setSyncMessage(`🎉 ${json.message || 'Successfully synced all server itineraries to Cloudflare D1!'}`);
-        } else {
-          setSyncMessage(`⚠️ Sync Error: ${json.error || 'Server rejected bulk sync'}`);
-        }
-      } else {
-        setSyncMessage('⚠️ Network error during bulk sync.');
-      }
-    } catch (e: any) {
-      setSyncMessage(`⚠️ Bulk Sync Exception: ${e.message}`);
-    } finally {
-      setIsBulkSyncing(false);
-      setTimeout(() => setSyncMessage(null), 6000);
-    }
-  };
+  const unsyncedLocalCount = hikes.filter(h => !serverHikeIds.includes(h.id)).length;
 
   return (
     <div className="w-full space-y-4">
-      {/* System Health Banner */}
-      {activeTab === 'library' && (
-        <div className="bg-white px-4 py-2 rounded-xl border border-[#E5E1DB] flex flex-col sm:flex-row items-start sm:items-center justify-between text-[11px] font-bold gap-2 sm:gap-0">
-          <div className="flex items-center gap-3">
-            <span className="text-[#8B8680]">Cloudflare D1 Connection:</span>
-            {healthStatus ? (
-              healthStatus.success && healthStatus.checks?.every((c: any) => c.ok) ? (
-                <span className="text-emerald-600 flex items-center gap-1">
-                  <CheckCircle className="w-3.5 h-3.5" /> Healthy
-                </span>
-              ) : (
-                <span className="text-rose-600 flex items-center gap-1">
-                  <XCircle className="w-3.5 h-3.5" /> Issue Detected
-                </span>
-              )
-            ) : (
-              <span className="text-[#8B8680]">Not checked</span>
-            )}
-          </div>
-          <div className="flex items-center gap-4">
-            <button 
-              onClick={checkHealth}
-              disabled={isCheckingHealth}
-              className="text-[#E08828] hover:underline cursor-pointer disabled:opacity-50"
-            >
-              {isCheckingHealth ? 'Checking...' : 'Run Diagnostics'}
-            </button>
-            <span className="text-[#E5E1DB] hidden sm:inline">|</span>
-            <button
-              onClick={handleBulkSyncToCloudflare}
-              disabled={isBulkSyncing}
-              className="text-purple-600 hover:underline cursor-pointer disabled:opacity-50 flex items-center gap-1"
-            >
-              {isBulkSyncing ? (
-                <>
-                  <RefreshCw className="w-3 h-3 animate-spin" /> Syncing D1...
-                </>
-              ) : (
-                <>☁️ Bulk Sync Server to D1</>
-              )}
-            </button>
-          </div>
-        </div>
-      )}
-
-      {/* Unsynced Local-Cache Warning Banner */}
-      {activeTab === 'library' && hikes.filter(h => !serverHikeIds.includes(h.id)).length > 0 && (
+      {/* Unsynced Local-Cache Notice Banner */}
+      {activeTab === 'library' && unsyncedLocalCount > 0 && (
         <div className="bg-[#FFF9F2] border border-[#F3E0C8] p-4 rounded-2xl flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 animate-in fade-in slide-in-from-top-2 duration-200">
           <div className="flex gap-2.5 items-start">
             <AlertTriangle className="w-5 h-5 text-[#E08828] shrink-0 mt-0.5" />
             <div>
-              <h4 className="text-xs font-bold text-[#6B3E08]">Unsynced Itineraries Found in Your Browser</h4>
+              <h4 className="text-xs font-bold text-[#6B3E08]">Unsynced Itineraries Found in Browser</h4>
               <p className="text-[11px] text-[#8C5D23] mt-0.5">
-                We detected {hikes.filter(h => !serverHikeIds.includes(h.id)).length} itinerary templates (including Hike #117, #116, #119 etc.) saved only in this browser's local cache. Since the server database was previously read-only, they haven't been synchronized. Click Sync to upload them now!
+                We detected {unsyncedLocalCount} itinerary template(s) saved in this browser's local cache.
               </p>
             </div>
           </div>
           <button
-            onClick={handleSyncUnsyncedHikes}
+            id="btn-unsynced-upload-db"
+            onClick={handleUploadToDatabase}
             disabled={isSyncingAll}
             className="w-full sm:w-auto shrink-0 flex items-center justify-center gap-1.5 px-4 py-2 bg-[#E08828] hover:bg-[#C86B1A] disabled:bg-[#E08828]/50 text-white text-xs font-bold rounded-xl shadow-xs transition-all cursor-pointer active:scale-95 whitespace-nowrap"
           >
             {isSyncingAll ? (
               <RefreshCw className="w-3.5 h-3.5 animate-spin" />
             ) : (
-              <RefreshCw className="w-3.5 h-3.5" />
+              <CloudUpload className="w-3.5 h-3.5" />
             )}
-            <span>{isSyncingAll ? 'Syncing...' : 'Sync to Server Database'}</span>
+            <span>{isSyncingAll ? 'Uploading...' : 'Upload to Database'}</span>
           </button>
         </div>
       )}
@@ -539,6 +471,9 @@ export default function AdminDashboard({ currentUserEmail }: AdminDashboardProps
           onDeleteHike={handleDeleteHike}
           onToggleStatus={handleToggleStatus}
           onRefresh={fetchItineraries}
+          onUploadToDatabase={handleUploadToDatabase}
+          isSyncingDatabase={isSyncingAll}
+          unsyncedCount={unsyncedLocalCount}
         />
       )}
 

@@ -1115,100 +1115,76 @@ async function startServer() {
   });
 
   /**
-   * POST /api/mapminers/contribute - Save contributed trail files and update metadata
+   * MAPMINERS ENDPOINTS (Cloudflare-only architecture)
    */
-  app.post('/api/mapminers/contribute', async (req, res) => {
+
+  // GET /api/mapminers/trails - Get all trails metadata from Cloudflare D1
+  app.get('/api/mapminers/trails', async (req, res) => {
     try {
-      const {
-        fileName,
-        fileContent,
-        name,
-        description,
-        difficulty,
-        stats,
-        bounds,
-        startPos,
-        contributorName,
-        contributorEmail,
-        province,
-        district,
-        nearbyCity,
-        highlights
-      } = req.body;
+      const cfRes = await fetch(`${CLOUDFLARE_WORKER_URL}/mapminers/trails`, {
+        signal: AbortSignal.timeout(6000),
+      });
+      if (cfRes.ok) {
+        const cfJson = await cfRes.json();
+        return res.json(cfJson);
+      } else {
+        const errText = await cfRes.text();
+        return res.status(cfRes.status).json({ success: false, error: errText });
+      }
+    } catch (err: any) {
+      console.error('[MapMiners] Cloudflare trails fetch error:', err);
+      return res.status(500).json({ success: false, error: err.message || 'Failed to fetch trails from Cloudflare' });
+    }
+  });
+
+  // GET /api/mapminers/download/:fileName - Stream GPX/KML file directly from Cloudflare R2
+  app.get('/api/mapminers/download/:fileName', async (req, res) => {
+    const fileName = req.params.fileName;
+    const cleanFileName = path.basename(fileName);
+
+    try {
+      const cfRes = await fetch(`${CLOUDFLARE_WORKER_URL}/mapminers/download/${encodeURIComponent(cleanFileName)}`, {
+        signal: AbortSignal.timeout(8000),
+      });
+      if (cfRes.ok) {
+        const content = await cfRes.text();
+        res.setHeader('Content-Type', cfRes.headers.get('Content-Type') || 'text/xml');
+        return res.send(content);
+      } else {
+        return res.status(cfRes.status).json({ error: 'Trail file not found in Cloudflare storage' });
+      }
+    } catch (e: any) {
+      console.error('[MapMiners] Cloudflare download error:', e);
+      return res.status(500).json({ error: e.message || 'Failed to download trail file' });
+    }
+  });
+
+  // POST /api/mapminers/upload & POST /api/mapminers/contribute - Upload directly to Cloudflare R2 & D1
+  app.post(['/api/mapminers/upload', '/api/mapminers/contribute'], async (req, res) => {
+    try {
+      const { fileName, fileContent, name } = req.body;
 
       if (!fileName || !fileContent || !name) {
         return res.status(400).json({ error: 'Missing required parameters: fileName, fileContent, or name' });
       }
 
-      // 1. Sanitize filename to prevent directory traversal
-      const cleanFileName = fileName.replace(/[^a-zA-Z0-9_\-\.]/g, '_');
-      const uniqueFileName = `${Date.now()}_${cleanFileName}`;
-
-      const kmlDir = path.join(process.cwd(), 'public', 'mapminers', 'kml');
-      
-      // Ensure the directory exists
-      if (!fs.existsSync(kmlDir)) {
-        fs.mkdirSync(kmlDir, { recursive: true });
-      }
-
-      // 2. Write the GPX/KML file contents to public directory
-      const filePath = path.join(kmlDir, uniqueFileName);
-      fs.writeFileSync(filePath, fileContent, 'utf-8');
-
-      // 3. Read, update, and write routes-metadata.json
-      const metadataPath = path.join(kmlDir, 'routes-metadata.json');
-      let metadataMap: Record<string, any> = {};
-
-      if (fs.existsSync(metadataPath)) {
-        try {
-          const rawMetadata = fs.readFileSync(metadataPath, 'utf-8');
-          metadataMap = JSON.parse(rawMetadata);
-        } catch (e) {
-          console.error('Error reading/parsing routes-metadata.json, recreating:', e);
-        }
-      }
-
-      // Add the new item
-      metadataMap[uniqueFileName] = {
-        name,
-        description: description || '',
-        difficultyOverride: difficulty || 'Auto',
-        hoursOverride: 'Auto',
-        contributorName: contributorName || 'Community Member',
-        contributorEmail: contributorEmail || '',
-        contributorUid: '',
-        calculatedDifficulty: difficulty || 'Moderate',
-        stats: {
-          distance: stats?.distance || 0,
-          elevationGain: stats?.elevationGain || 0,
-          elevationLoss: stats?.elevationLoss || 0,
-          minElevation: stats?.minElevation || 0,
-          maxElevation: stats?.maxElevation || 0,
-          startElevation: stats?.startElevation || 0,
-          endElevation: stats?.endElevation || 0,
-          estimatedHours: stats?.estimatedHours || 0,
-        },
-        bounds: bounds || [[27.7, 85.3], [27.8, 85.4]],
-        startPos: startPos || { lat: 27.7, lng: 85.3 },
-        province: province || 'Bagmati',
-        district: district || 'Kathmandu',
-        nearbyCity: nearbyCity || 'Kathmandu',
-        highlights: highlights || 'Uploaded by community',
-        uploadedAt: new Date().toISOString()
-      };
-
-      fs.writeFileSync(metadataPath, JSON.stringify(metadataMap, null, 2), 'utf-8');
-
-      console.log(`[MapMiners] Persisted contributed trail "${name}" to ${uniqueFileName} and metadata!`);
-
-      return res.json({
-        success: true,
-        fileName: uniqueFileName,
-        message: 'Trail file uploaded and registered successfully!'
+      const cfRes = await fetch(`${CLOUDFLARE_WORKER_URL}/mapminers/upload`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(req.body),
+        signal: AbortSignal.timeout(10000),
       });
+
+      if (cfRes.ok) {
+        const cfJson = await cfRes.json();
+        return res.json(cfJson);
+      } else {
+        const errText = await cfRes.text();
+        return res.status(cfRes.status).json({ error: errText || 'Failed to save trail to Cloudflare' });
+      }
     } catch (err: any) {
-      console.error('Error handling mapminers contribution:', err);
-      return res.status(500).json({ error: err.message || 'Internal server error' });
+      console.error('[MapMiners] Cloudflare upload error:', err);
+      return res.status(500).json({ error: err.message || 'Failed to upload trail to Cloudflare' });
     }
   });
 
@@ -1271,9 +1247,8 @@ async function startServer() {
     const minPrice = prices.length > 0 ? Math.min(...prices) : 0;
     const maxPrice = prices.length > 0 ? Math.max(...prices) : 0;
 
-    // Comprehensive payload matching both worker formats
-    const payload = {
-      id: record.id,
+    // Comprehensive payload matching worker format (omit explicit 'id' to avoid D1 UNIQUE constraint failures)
+    const payload: Record<string, any> = {
       hike_number: String(record.hikeNumber || d?.hikeNumber || 'TBD'),
       hikeNumber: String(record.hikeNumber || d?.hikeNumber || 'TBD'),
       title: record.title || d?.title || 'Walk Nepal Walk Hike',
@@ -1312,7 +1287,7 @@ async function startServer() {
 
     // 1. Try POST /treks/sync
     try {
-      const res = await fetch(`${CLOUDFLARE_WORKER_URL}/treks/sync`, {
+      let res = await fetch(`${CLOUDFLARE_WORKER_URL}/treks/sync`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
@@ -1325,8 +1300,26 @@ async function startServer() {
         return { success: true };
       }
 
-      const syncErr = await res.text().catch(() => 'No body');
+      let syncErr = await res.text().catch(() => 'No body');
       console.warn(`[Cloudflare D1 Sync] Failed /treks/sync Status ${res.status}:`, syncErr);
+
+      // If UNIQUE constraint failed on id, retry payload stripping id explicitly
+      if (syncErr.includes('UNIQUE constraint failed') || syncErr.includes('SQLITE_CONSTRAINT')) {
+        console.log(`[Cloudflare D1] Retrying /treks/sync without conflicting ID...`);
+        const strippedPayload = { ...payload };
+        delete strippedPayload.id;
+        const retryRes = await fetch(`${CLOUDFLARE_WORKER_URL}/treks/sync`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(strippedPayload),
+          signal: AbortSignal.timeout(10000),
+        });
+        if (retryRes.ok) {
+          console.log(`[Cloudflare D1] SUCCESS: Synced Hike #${record.hikeNumber} after stripping ID`);
+          return { success: true };
+        }
+        syncErr = await retryRes.text().catch(() => 'No body');
+      }
 
       // If /treks/sync gave 404 or 405, fallback to POST /treks
       if (res.status === 404 || res.status === 405) {

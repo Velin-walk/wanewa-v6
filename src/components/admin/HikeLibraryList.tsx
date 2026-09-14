@@ -38,6 +38,9 @@ interface HikeLibraryListProps {
   onDeleteHike: (hikeId: string) => void;
   onToggleStatus: (hikeId: string, newStatus: 'draft' | 'published' | 'archived') => void;
   onRefresh?: () => void;
+  onUploadToDatabase?: () => void;
+  isSyncingDatabase?: boolean;
+  unsyncedCount?: number;
 }
 
 export const HikeLibraryList: React.FC<HikeLibraryListProps> = ({
@@ -50,6 +53,9 @@ export const HikeLibraryList: React.FC<HikeLibraryListProps> = ({
   onDeleteHike,
   onToggleStatus,
   onRefresh,
+  onUploadToDatabase,
+  isSyncingDatabase = false,
+  unsyncedCount = 0,
 }) => {
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedCategory, setSelectedCategory] = useState<string>('all');
@@ -57,32 +63,10 @@ export const HikeLibraryList: React.FC<HikeLibraryListProps> = ({
   const [sharingHike, setSharingHike] = useState<SavedHikeRecord | null>(null);
   const [deletingHike, setDeletingHike] = useState<SavedHikeRecord | null>(null);
   const [actionFeedback, setActionFeedback] = useState<string | null>(null);
-  const [isSyncingCloudflare, setIsSyncingCloudflare] = useState(false);
 
   const showToast = (msg: string) => {
     setActionFeedback(msg);
     setTimeout(() => setActionFeedback(null), 3000);
-  };
-
-  const handleSyncAllToCloudflare = async () => {
-    setIsSyncingCloudflare(true);
-    try {
-      const res = await apiFetch('admin/sync-all-to-cloudflare', {
-        method: 'POST',
-      });
-      const json = await res.json().catch(() => ({}));
-      if (res.ok && json.success) {
-        showToast(json.message || '⚡ All itineraries synced to Cloudflare D1!');
-        if (onRefresh) onRefresh();
-      } else {
-        const errorDetail = json.results?.find((r: any) => !r.success)?.error || json.error || 'Check Cloudflare worker';
-        showToast(`⚠️ Sync notice: ${errorDetail}`);
-      }
-    } catch (e: any) {
-      showToast('⚠️ Sync error: ' + (e?.message || 'Network failure'));
-    } finally {
-      setIsSyncingCloudflare(false);
-    }
   };
 
   // Filter hikes
@@ -155,17 +139,25 @@ export const HikeLibraryList: React.FC<HikeLibraryListProps> = ({
           </div>
 
           <div className="flex items-center gap-2.5 self-start md:self-auto flex-wrap">
-            <button
-              id="btn-sync-cloudflare"
-              type="button"
-              onClick={handleSyncAllToCloudflare}
-              disabled={isSyncingCloudflare}
-              title="Push all itineraries to Cloudflare D1 database"
-              className="flex items-center gap-2 px-3.5 py-2.5 bg-[#FAF8F5] border border-[#E5E1DB] hover:border-[#E08828] hover:text-[#E08828] text-[#5A5551] rounded-2xl font-bold text-xs transition-all cursor-pointer disabled:opacity-50"
-            >
-              <CloudUpload className={`w-4 h-4 ${isSyncingCloudflare ? 'animate-bounce text-[#E08828]' : ''}`} />
-              <span>{isSyncingCloudflare ? 'Syncing D1...' : 'Push to Cloudflare D1'}</span>
-            </button>
+            {onUploadToDatabase && (
+              <button
+                id="btn-upload-to-database"
+                type="button"
+                onClick={onUploadToDatabase}
+                disabled={isSyncingDatabase}
+                title="Upload and sync all itineraries to database"
+                className="flex items-center gap-2 px-3.5 py-2.5 bg-[#FAF8F5] border border-[#E5E1DB] hover:border-[#E08828] hover:text-[#E08828] text-[#5A5551] rounded-2xl font-bold text-xs transition-all cursor-pointer disabled:opacity-50"
+              >
+                <CloudUpload className={`w-4 h-4 ${isSyncingDatabase ? 'animate-bounce text-[#E08828]' : ''}`} />
+                <span>
+                  {isSyncingDatabase
+                    ? 'Uploading...'
+                    : unsyncedCount && unsyncedCount > 0
+                    ? `Upload to Database (${unsyncedCount} unsynced)`
+                    : 'Upload to Database'}
+                </span>
+              </button>
+            )}
 
             {onRefresh && (
               <button
